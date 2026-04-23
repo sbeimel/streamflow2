@@ -56,6 +56,13 @@ export default function StreamChecker() {
   const { toast } = useToast()
 
   useEffect(() => {
+    // Load M3U accounts once on mount — they don't change during polling
+    m3uAPI.getAccounts()
+      .then(res => setM3uAccounts(res.data.accounts || []))
+      .catch(err => console.error('Failed to load M3U accounts:', err))
+  }, [])
+
+  useEffect(() => {
     loadData()
     // Poll for updates - use shorter interval when checking is active
     const pollInterval = (status?.checking || (status?.queue?.queue_size > 0)) ? 1000 : 3000
@@ -75,16 +82,14 @@ export default function StreamChecker() {
 
   const loadData = async () => {
     try {
-      const [statusResponse, progressResponse, configResponse, m3uResponse] = await Promise.all([
+      const [statusResponse, progressResponse, configResponse] = await Promise.all([
         streamCheckerAPI.getStatus(),
         streamCheckerAPI.getProgress(),
-        streamCheckerAPI.getConfig(),
-        m3uAPI.getAccounts()
+        streamCheckerAPI.getConfig()
       ])
       setStatus(statusResponse.data)
       setProgress(progressResponse.data)
       setConfig(configResponse.data)
-      setM3uAccounts(m3uResponse.data.accounts || [])
       if (!editedConfig && configResponse.data) {
         setEditedConfig(configResponse.data)
       }

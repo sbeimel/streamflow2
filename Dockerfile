@@ -8,10 +8,11 @@ FROM node:20-slim AS frontend-builder
 WORKDIR /frontend
 
 # Copy package files first for better layer caching
-COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/package.json ./
+COPY frontend/package-lock.json* ./
 
-# Install dependencies (use ci for reproducible builds)
-RUN npm ci --prefer-offline 2>/dev/null || npm install
+# Install dependencies (use ci if lockfile exists, otherwise npm install)
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline 2>/dev/null || npm install; else npm install; fi
 
 # Copy frontend source
 COPY frontend/ ./

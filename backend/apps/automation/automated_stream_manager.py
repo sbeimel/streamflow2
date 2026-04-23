@@ -3369,6 +3369,34 @@ class AutomatedStreamManager:
         """
         return channels
         
+    def run_discover_only(self) -> Dict:
+        """Run M3U playlist update + stream matching/assignment only — no quality check.
+
+        This is the "Discover & Assign" action: refreshes playlists from all
+        active M3U accounts and then runs stream matching for all channels that
+        have a profile with m3u_update or stream_matching enabled.  Stream
+        checking is intentionally skipped regardless of profile settings.
+
+        Returns:
+            Dict with success flag and summary counts.
+        """
+        import threading
+        logger.info("Discover & Assign: starting M3U update + stream matching (no quality check)")
+
+        def _run():
+            try:
+                # Step 1: refresh playlists
+                self.refresh_playlists(force=True, skip_changelog=False)
+                # Step 2: discover and assign streams, skip check trigger
+                self.discover_and_assign_streams(force=True, skip_check_trigger=True, skip_changelog=False)
+                logger.info("Discover & Assign: completed")
+            except Exception as exc:
+                logger.error(f"Discover & Assign failed: {exc}")
+
+        t = threading.Thread(target=_run, daemon=True, name="discover-only")
+        t.start()
+        return {'success': True, 'message': 'Discover & Assign started — M3U update and stream matching running in background.'}
+
     def trigger_automation(self, period_id=None, force=True):
         """Manually trigger an automation cycle.
         

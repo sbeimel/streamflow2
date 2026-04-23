@@ -1369,6 +1369,19 @@ def trigger_global_action():
         return jsonify({"error": "Internal Server Error"}), 500
 
 
+@app.route('/api/automation/discover', methods=['POST'])
+def discover_and_assign():
+    """Run M3U update + stream matching only (no quality check) for all channels."""
+    try:
+        from apps.automation.automated_stream_manager import get_automated_stream_manager
+        manager = get_automated_stream_manager()
+        result = manager.run_discover_only()
+        return jsonify(result), 202
+    except Exception as e:
+        logger.error(f"Error triggering discover: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
+
+
 # ============================================================================
 # Scheduling API Endpoints
 # ============================================================================

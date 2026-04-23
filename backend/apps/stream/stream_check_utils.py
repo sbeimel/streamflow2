@@ -718,6 +718,8 @@ def get_stream_info_and_bitrate(url: str, duration: int = 30, timeout: int = 30,
                     "HTTP error", "SSL", "TLS", "Certificate"
                 ]
                 _log_ffmpeg_errors(output, logger, error_patterns)
+            # No bitrate in any case = stream is not delivering content → Error
+            result_data['status'] = 'Error'
 
         logger.debug(f"  Analysis completed in {elapsed:.2f}s")
 

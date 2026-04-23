@@ -401,22 +401,20 @@ def is_stream_dead(stream_data: Dict[str, Any], config: Dict[str, Any] = None) -
                  'low_quality' (below thresholds), 'none' (not dead)
     """
     # ── Early-exit / instability check ───────────────────────────────────────
-    # A stream that never completed the probe window on any attempt is
-    # unreliable regardless of the quality data it returned.  The partial
-    # metrics (bitrate, resolution) are not representative of sustained
-    # delivery and should not be scored.
-    #
-    # elapsed_time and ffmpeg_duration are set by analyze_stream() and flow
-    # through the analyzed dict.  If they are absent (e.g. cached streams or
-    # legacy callers) the check is skipped safely.
+    # A stream that never completed the probe window AND produced no bitrate
+    # is unreliable. However, if a stream exited early but delivered a valid
+    # bitrate, it is considered alive — early exit alone is not sufficient to
+    # mark a stream as dead when content was actually received.
     EARLY_EXIT_THRESHOLD = 0.8
     elapsed  = stream_data.get('elapsed_time')
     expected = stream_data.get('ffmpeg_duration')
+    bitrate  = stream_data.get('bitrate_kbps')
     if (
         elapsed is not None
         and expected is not None
         and expected > 0
         and elapsed < expected * EARLY_EXIT_THRESHOLD
+        and not (isinstance(bitrate, (int, float)) and bitrate > 0)
     ):
         return True, 'unstable'
 

@@ -6,11 +6,13 @@ import { Progress } from '@/components/ui/progress.jsx'
 import { Alert, AlertDescription } from '@/components/ui/alert.jsx'
 import { Label } from '@/components/ui/label.jsx'
 import { Switch } from '@/components/ui/switch.jsx'
+import { Separator } from '@/components/ui/separator.jsx'
 import { useToast } from '@/hooks/use-toast.js'
 import { automationAPI, streamCheckerAPI, m3uAPI, dispatcharrAPI, environmentAPI } from '@/services/api.js'
 import {
   PlayCircle, RefreshCw, Activity, CheckCircle2,
-  Loader2, ChevronDown, Tv, Radio, Database, WifiOff
+  Loader2, ChevronDown, Tv, Radio, Database, WifiOff,
+  Search, RotateCcw, Zap, TestTube
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -267,6 +269,60 @@ export default function Dashboard() {
     }
   }
 
+  const handleDiscover = async () => {
+    try {
+      setActionLoading('discover')
+      const res = await fetch('/api/automation/discover', { method: 'POST' })
+      const data = await res.json()
+      toast({ title: "Discover & Assign Started", description: data.message || "M3U update and stream matching running in background." })
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to trigger Discover & Assign", variant: "destructive" })
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  const handleGlobalAction = async () => {
+    try {
+      setActionLoading('global-action')
+      await fetch('/api/stream-checker/global-action', { method: 'POST' })
+      toast({ title: "Force Check Started", description: "All channels queued for force check." })
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to trigger force check", variant: "destructive" })
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  const handleRescoreResort = async () => {
+    try {
+      setActionLoading('rescore-resort')
+      const res = await fetch('/api/stream-checker/rescore-resort', { method: 'POST' })
+      const data = await res.json()
+      toast({ title: "Rescore & Resort Started", description: data.message || `${data.queued || 0} channels queued.` })
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to trigger rescore", variant: "destructive" })
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  const handleTestMissingStats = async () => {
+    try {
+      setActionLoading('test-missing')
+      const res = await fetch('/api/stream-checker/test-streams-without-stats', { method: 'POST' })
+      const data = await res.json()
+      toast({
+        title: data.streams_found > 0 ? "Test Missing Stats Started" : "No Missing Stats Found",
+        description: data.message || `Found ${data.streams_found || 0} streams with missing stats.`
+      })
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to trigger test missing stats", variant: "destructive" })
+    } finally {
+      setActionLoading('')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -481,6 +537,56 @@ export default function Dashboard() {
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
+
+              <Separator />
+
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={shouldDisableActions}
+                onClick={handleDiscover}
+              >
+                {actionLoading === 'discover'
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <Search className="mr-2 h-4 w-4" />}
+                Discover & Assign
+              </Button>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={shouldDisableActions}
+                onClick={handleGlobalAction}
+              >
+                {actionLoading === 'global-action'
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <Zap className="mr-2 h-4 w-4" />}
+                Force Check All
+              </Button>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={shouldDisableActions}
+                onClick={handleRescoreResort}
+              >
+                {actionLoading === 'rescore-resort'
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <RotateCcw className="mr-2 h-4 w-4" />}
+                Rescore & Resort
+              </Button>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={shouldDisableActions}
+                onClick={handleTestMissingStats}
+              >
+                {actionLoading === 'test-missing'
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <TestTube className="mr-2 h-4 w-4" />}
+                Test Missing Stats
+              </Button>
             </div>
           </div>
         </CardContent>
@@ -583,6 +689,11 @@ export default function Dashboard() {
                         <Badge variant={isEnabled ? "default" : "secondary"}>
                           {isEnabled ? "Enabled" : "Disabled"}
                         </Badge>
+                        {playlist.proxy && (
+                          <Badge variant="outline" className="text-xs font-mono">
+                            proxy: {playlist.proxy}
+                          </Badge>
+                        )}
                       </div>
                       {playlist.url && (
                         <p className="text-xs text-muted-foreground mt-1 truncate max-w-md">{playlist.url}</p>

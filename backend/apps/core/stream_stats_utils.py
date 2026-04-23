@@ -391,6 +391,7 @@ def is_stream_dead(stream_data: Dict[str, Any], config: Dict[str, Any] = None) -
         config: Optional configuration dictionary with thresholds:
                 - min_resolution_width: Minimum width in pixels (default: 0 = no check)
                 - min_resolution_height: Minimum height in pixels (default: 0 = no check)
+                - max_resolution_height: Maximum height in pixels (default: 0 = no check)
                 - min_bitrate_kbps: Minimum bitrate in kbps (default: 0 = no check)
                 - min_score: Minimum score 0-100 (default: 0 = no check)
         
@@ -441,9 +442,12 @@ def is_stream_dead(stream_data: Dict[str, Any], config: Dict[str, Any] = None) -
                     if config:
                         min_width = config.get('min_resolution_width', 0)
                         min_height = config.get('min_resolution_height', 0)
+                        max_height = config.get('max_resolution_height', 0)
                         if min_width > 0 and width < min_width:
                             return True, 'low_quality'
                         if min_height > 0 and height < min_height:
+                            return True, 'low_quality'
+                        if max_height > 0 and height > max_height:
                             return True, 'low_quality'
             except (ValueError, IndexError):
                 pass

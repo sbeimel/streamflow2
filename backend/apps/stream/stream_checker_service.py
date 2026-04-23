@@ -468,6 +468,14 @@ class StreamCheckerService:
         elif min_res == '360p':
             config['min_resolution_width'], config['min_resolution_height'] = 640, 360
 
+        max_res = stream_checking.get('max_resolution', 'any')
+        if max_res == '720p':
+            config['max_resolution_height'] = 720
+        elif max_res == '1080p':
+            config['max_resolution_height'] = 1080
+        elif max_res in ('2160p', '4k'):
+            config['max_resolution_height'] = 2160
+
         min_bitrate = stream_checking.get('min_bitrate', 0)
         if min_bitrate and min_bitrate > 0:
             config['min_bitrate_kbps'] = min_bitrate
@@ -3182,15 +3190,11 @@ class StreamCheckerService:
         if _dead:
             return 0.0
 
-        # Resolve scoring method and codec preferences from config
-        scoring_method = self.config.get('scoring.method', 'legacy')
-        avoid_h265 = self.config.get('scoring.avoid_h265', False)
-
-        # Use per-profile weights if provided, otherwise fall back to global config
-        if scoring_weights is None:
-            weights = self.config.get('scoring.weights', {})
-            prefer_h265 = self.config.get('scoring.prefer_h265', True)
-        else:
+        # Resolve scoring method and codec preferences:
+        # Per-profile settings take priority over global config
+        if scoring_weights is not None:
+            scoring_method = scoring_weights.get('scoring_method') or self.config.get('scoring.method', 'legacy')
+            avoid_h265 = scoring_weights.get('avoid_h265', self.config.get('scoring.avoid_h265', False))
             weights = {
                 'bitrate': scoring_weights.get('bitrate', 0.35),
                 'resolution': scoring_weights.get('resolution', 0.30),
@@ -3199,6 +3203,11 @@ class StreamCheckerService:
                 'hdr': scoring_weights.get('hdr', 0.10)
             }
             prefer_h265 = scoring_weights.get('prefer_h265', True)
+        else:
+            scoring_method = self.config.get('scoring.method', 'legacy')
+            avoid_h265 = self.config.get('scoring.avoid_h265', False)
+            weights = self.config.get('scoring.weights', {})
+            prefer_h265 = self.config.get('scoring.prefer_h265', True)
 
         # --- Enhanced scoring (MACstrom-inspired sigmoid) ---
         if scoring_method == 'enhanced':
@@ -3211,10 +3220,6 @@ class StreamCheckerService:
                     use_legacy_scoring=False,
                     avoid_h265=avoid_h265
                 )
-                # Apply resolution preference to enhanced score too
-                res_mode = self.config.get('resolution_preference.mode', 'default')
-                if res_mode != 'default':
-                    score = self._apply_resolution_preference(score, stream_data, res_mode)
                 return round(score, 2)
             except Exception as e:
                 logger.warning(f"Enhanced scoring failed, falling back to legacy: {e}")
@@ -3281,53 +3286,7 @@ class StreamCheckerService:
         hdr_score = 1.0 if hdr_format in ['HDR10', 'HLG'] else 0.0
         score += hdr_score * weights.get('hdr', 0.10)
 
-        # --- Resolution Preference adjustment ---
-        res_mode = self.config.get('resolution_preference.mode', 'default')
-        if res_mode != 'default':
-            score = self._apply_resolution_preference(score, stream_data, res_mode)
-
         return round(score, 2)
-
-    def _apply_resolution_preference(self, score: float, stream_data: Dict, mode: str) -> float:
-        """Apply resolution preference bonus or penalty to a stream score.
-
-        Modes:
-          prefer_4k  : +0.5 bonus for 4K streams
-          avoid_4k   : -0.5 penalty for 4K streams (Full HD preferred)
-          max_1080p  : -10.0 penalty for streams above 1080p (effectively excluded)
-          max_720p   : -10.0 penalty for streams above 720p (effectively excluded)
-
-        Args:
-            score: Current stream score (0.0-1.0 range for legacy/enhanced)
-            stream_data: Stream analysis dict with 'resolution' key
-            mode: Resolution preference mode string
-
-        Returns:
-            Adjusted score (may be negative for hard exclusions — caller rounds to 0 if needed)
-        """
-        resolution = stream_data.get('resolution', 'N/A')
-        if not resolution or resolution == 'N/A' or 'x' not in str(resolution):
-            return score
-
-        try:
-            _, height = map(int, resolution.split('x'))
-        except (ValueError, AttributeError):
-            return score
-
-        if mode == 'prefer_4k':
-            if height >= 2160:
-                score += 0.5
-        elif mode == 'avoid_4k':
-            if height >= 2160:
-                score -= 0.5
-        elif mode == 'max_1080p':
-            if height > 1080:
-                score -= 10.0  # Effectively excluded from top positions
-        elif mode == 'max_720p':
-            if height > 720:
-                score -= 10.0  # Effectively excluded from top positions
-
-        return score
 
     def _apply_account_stream_limits(self, analyzed_streams: List[Dict], channel_id: int) -> List[Dict]:
         """Apply per-account stream limits per channel.

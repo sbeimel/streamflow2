@@ -233,7 +233,14 @@ export default function AutomationProfileStudio() {
                                         </Badge>
                                     </TableCell>
                                     <TableCell>
-                                        <span className="text-sm">{profile.stream_checking?.min_resolution || 'Any'}</span>
+                                        <span className="text-sm">
+                                            {profile.stream_checking?.min_resolution && profile.stream_checking.min_resolution !== 'any'
+                                                ? `${profile.stream_checking.min_resolution}+`
+                                                : 'Any'}
+                                            {profile.stream_checking?.max_resolution && profile.stream_checking.max_resolution !== 'any'
+                                                ? ` – ${profile.stream_checking.max_resolution} max`
+                                                : ''}
+                                        </span>
                                     </TableCell>
                                     <TableCell>
                                         <span className="text-sm">{profile.stream_checking?.min_bitrate ? `${profile.stream_checking.min_bitrate} kbps` : 'Any'}</span>

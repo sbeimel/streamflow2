@@ -1,6 +1,6 @@
 services:
   stream-checker:
-    image: ghcr.io/krinkuto11/streamflow:latest
+    image: sbeimel/streamflow2-v1:latest
     ports:
       - "5000:5000"   # Flask API (serves both API and static frontend)
     volumes:

@@ -46,7 +46,35 @@ def _normalize_profile_payload(data: Dict[str, Any]) -> Dict[str, Any]:
             field_name="stream_checking.remove_dead_streams",
         )
 
+    if "max_resolution" in normalized_stream_checking:
+        valid_max_res = ('any', '720p', '1080p', '4k', '2160p')
+        if normalized_stream_checking["max_resolution"] not in valid_max_res:
+            raise ValidationError(
+                f"stream_checking.max_resolution must be one of: {', '.join(valid_max_res)}"
+            )
+
     normalized["stream_checking"] = normalized_stream_checking
+
+    # Validate scoring_weights fields if present
+    scoring_weights = data.get("scoring_weights")
+    if scoring_weights is not None:
+        if not isinstance(scoring_weights, dict):
+            raise ValidationError("scoring_weights must be an object")
+        normalized_scoring_weights = dict(scoring_weights)
+
+        if "scoring_method" in normalized_scoring_weights:
+            if normalized_scoring_weights["scoring_method"] not in ('legacy', 'enhanced'):
+                raise ValidationError("scoring_weights.scoring_method must be 'legacy' or 'enhanced'")
+
+        for bool_field in ("prefer_h265", "avoid_h265"):
+            if bool_field in normalized_scoring_weights:
+                normalized_scoring_weights[bool_field] = _parse_bool(
+                    normalized_scoring_weights[bool_field],
+                    field_name=f"scoring_weights.{bool_field}",
+                )
+
+        normalized["scoring_weights"] = normalized_scoring_weights
+
     return normalized
 
 

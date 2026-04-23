@@ -11,7 +11,7 @@ import { Separator } from '@/components/ui/separator.jsx'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.jsx'
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from '@/components/ui/pagination.jsx'
 import { useToast } from '@/hooks/use-toast.js'
-import { streamCheckerAPI, deadStreamsAPI } from '@/services/api.js'
+import { streamCheckerAPI, deadStreamsAPI, m3uAPI } from '@/services/api.js'
 import {
   Activity,
   CheckCircle2,
@@ -52,6 +52,7 @@ export default function StreamChecker() {
     has_prev: false
   })
   const [totalDeadStreams, setTotalDeadStreams] = useState(0)
+  const [m3uAccounts, setM3uAccounts] = useState([])
   const { toast } = useToast()
 
   useEffect(() => {
@@ -74,14 +75,16 @@ export default function StreamChecker() {
 
   const loadData = async () => {
     try {
-      const [statusResponse, progressResponse, configResponse] = await Promise.all([
+      const [statusResponse, progressResponse, configResponse, m3uResponse] = await Promise.all([
         streamCheckerAPI.getStatus(),
         streamCheckerAPI.getProgress(),
-        streamCheckerAPI.getConfig()
+        streamCheckerAPI.getConfig(),
+        m3uAPI.getAccounts()
       ])
       setStatus(statusResponse.data)
       setProgress(progressResponse.data)
       setConfig(configResponse.data)
+      setM3uAccounts(m3uResponse.data.accounts || [])
       if (!editedConfig && configResponse.data) {
         setEditedConfig(configResponse.data)
       }
@@ -665,10 +668,9 @@ export default function StreamChecker() {
 
               {/* Tabs for Configuration Sections */}
               <Tabs defaultValue="analysis" className="w-full">
-                <TabsList className="grid w-full grid-cols-7">
+                <TabsList className="grid w-full grid-cols-6">
                   <TabsTrigger value="analysis">Stream Analysis</TabsTrigger>
                   <TabsTrigger value="concurrent">Concurrent Checking</TabsTrigger>
-                  <TabsTrigger value="scoring">Scoring</TabsTrigger>
                   <TabsTrigger value="stream-ordering">Stream Ordering</TabsTrigger>
                   <TabsTrigger value="exclusions">Exclusions</TabsTrigger>
                   <TabsTrigger value="immunity">Immunity</TabsTrigger>
@@ -843,154 +845,6 @@ export default function StreamChecker() {
                   </div>
                 </TabsContent>
 
-                {/* Scoring Tab */}
-                <TabsContent value="scoring" className="space-y-4">
-                  <div className="space-y-4">
-                    {/* Scoring Method */}
-                    <div className="space-y-2">
-                      <Label>Scoring Method</Label>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div
-                          className={`border rounded-lg p-3 cursor-pointer transition-colors ${
-                            (editedConfig?.scoring?.method ?? 'legacy') === 'legacy'
-                              ? 'border-primary bg-primary/5'
-                              : 'border-border hover:border-primary/50'
-                          }`}
-                          onClick={() => configEditing && updateConfigValue('scoring.method', 'legacy')}
-                        >
-                          <div className="font-medium text-sm">Legacy (Linear)</div>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Weighted sum of bitrate, resolution, FPS, codec. Simple and predictable.
-                          </p>
-                        </div>
-                        <div
-                          className={`border rounded-lg p-3 cursor-pointer transition-colors ${
-                            editedConfig?.scoring?.method === 'enhanced'
-                              ? 'border-primary bg-primary/5'
-                              : 'border-border hover:border-primary/50'
-                          }`}
-                          onClick={() => configEditing && updateConfigValue('scoring.method', 'enhanced')}
-                        >
-                          <div className="font-medium text-sm">Enhanced (Sigmoid)</div>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Codec-aware reference bitrates with sigmoid curve. HEVC @ 4.5 Mbps = H.264 @ 8 Mbps.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Codec Preference */}
-                    <div className="space-y-3">
-                      <Label>Codec Preference</Label>
-
-                      {/* Prefer H.265 */}
-                      <div className="flex items-center justify-between rounded-lg border p-3">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="prefer_h265" className="cursor-pointer">Prefer H.265/HEVC</Label>
-                          <p className="text-xs text-muted-foreground">
-                            Give H.265/HEVC streams a higher codec score (Legacy scoring only)
-                          </p>
-                        </div>
-                        <Switch
-                          id="prefer_h265"
-                          checked={editedConfig?.scoring?.prefer_h265 === true && editedConfig?.scoring?.avoid_h265 !== true}
-                          onCheckedChange={(checked) => {
-                            updateConfigValue('scoring.prefer_h265', checked)
-                            if (checked) updateConfigValue('scoring.avoid_h265', false)
-                          }}
-                          disabled={!configEditing || editedConfig?.scoring?.avoid_h265 === true}
-                        />
-                      </div>
-
-                      {/* Avoid H.265 */}
-                      <div className="flex items-center justify-between rounded-lg border p-3">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="avoid_h265" className="cursor-pointer">Avoid H.265/HEVC</Label>
-                          <p className="text-xs text-muted-foreground">
-                            Penalize H.265/HEVC streams — prefer H.264 for compatibility (both scoring methods)
-                          </p>
-                        </div>
-                        <Switch
-                          id="avoid_h265"
-                          checked={editedConfig?.scoring?.avoid_h265 === true}
-                          onCheckedChange={(checked) => {
-                            updateConfigValue('scoring.avoid_h265', checked)
-                            if (checked) updateConfigValue('scoring.prefer_h265', false)
-                          }}
-                          disabled={!configEditing}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Legacy Weights (only shown when legacy method selected) */}
-                    {(editedConfig?.scoring?.method ?? 'legacy') === 'legacy' && (                      <div className="space-y-3">
-                        <Label>Scoring Weights (Legacy)</Label>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          {['bitrate', 'resolution', 'fps', 'codec'].map((key) => (
-                            <div key={key} className="space-y-1">
-                              <Label htmlFor={`weight_${key}`} className="capitalize text-xs">{key}</Label>
-                              <Input
-                                id={`weight_${key}`}
-                                type="number"
-                                step="0.05"
-                                min="0"
-                                max="1"
-                                value={editedConfig?.scoring?.weights?.[key] ?? (key === 'bitrate' ? 0.40 : key === 'resolution' ? 0.35 : key === 'fps' ? 0.15 : 0.10)}
-                                onChange={(e) => updateConfigValue(`scoring.weights.${key}`, parseFloat(e.target.value))}
-                                disabled={!configEditing}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Weights should sum to 1.0. Current sum:{' '}
-                          {(
-                            (editedConfig?.scoring?.weights?.bitrate ?? 0.40) +
-                            (editedConfig?.scoring?.weights?.resolution ?? 0.35) +
-                            (editedConfig?.scoring?.weights?.fps ?? 0.15) +
-                            (editedConfig?.scoring?.weights?.codec ?? 0.10)
-                          ).toFixed(2)}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Resolution Preference */}
-                  <div className="space-y-3 pt-2 border-t">
-                    <Label>Resolution Preference</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Adjust scoring to prefer or limit specific resolutions. Works with both Legacy and Enhanced scoring.
-                    </p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {[
-                        { value: 'default', label: 'Default', desc: 'Normal quality-based sorting (4K > 1080p > 720p)' },
-                        { value: 'prefer_4k', label: 'Prefer 4K', desc: '4K streams get +0.5 score bonus' },
-                        { value: 'avoid_4k', label: 'Avoid 4K', desc: '4K streams get -0.5 penalty (Full HD preferred)' },
-                        { value: 'max_1080p', label: 'Max 1080p', desc: 'Streams above 1080p are effectively excluded' },
-                        { value: 'max_720p', label: 'Max 720p', desc: 'Streams above 720p are effectively excluded' },
-                      ].map(({ value, label, desc }) => (
-                        <div
-                          key={value}
-                          className={`border rounded-lg p-3 cursor-pointer transition-colors ${
-                            (editedConfig?.resolution_preference?.mode ?? 'default') === value
-                              ? 'border-primary bg-primary/5'
-                              : 'border-border hover:border-primary/50'
-                          }`}
-                          onClick={() => configEditing && updateConfigValue('resolution_preference.mode', value)}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium text-sm">{label}</span>
-                            {(editedConfig?.resolution_preference?.mode ?? 'default') === value && (
-                              <span className="text-xs text-primary">✓ Active</span>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </TabsContent>
-
                 {/* Stream Ordering Tab */}
                 <TabsContent value="stream-ordering" className="space-y-4">
                   {/* Provider Diversification */}
@@ -1110,25 +964,34 @@ export default function StreamChecker() {
 
                   {editedConfig?.quality_check_exclusions?.enabled && (
                     <div className="space-y-3">
-                      <Label>Excluded M3U Account IDs</Label>
+                      <Label>Excluded M3U Accounts</Label>
                       <p className="text-xs text-muted-foreground">
-                        Enter the numeric M3U account IDs to exclude (one per line or comma-separated).
-                        Find IDs in Dispatcharr under M3U Accounts.
+                        Streams from these accounts skip FFmpeg analysis and receive a priority-based score instead.
                       </p>
-                      <textarea
-                        className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                        placeholder="e.g. 4, 5, 12"
-                        disabled={!configEditing}
-                        value={(editedConfig?.quality_check_exclusions?.excluded_accounts || []).join(', ')}
-                        onChange={(e) => {
-                          const raw = e.target.value
-                          const ids = raw
-                            .split(/[\s,]+/)
-                            .map(v => parseInt(v.trim(), 10))
-                            .filter(v => !isNaN(v))
-                          updateConfigValue('quality_check_exclusions.excluded_accounts', ids)
-                        }}
-                      />
+                      <div className="border rounded-md divide-y overflow-hidden bg-background">
+                        {m3uAccounts.map(account => {
+                          const excluded = (editedConfig?.quality_check_exclusions?.excluded_accounts || []).includes(account.id)
+                          return (
+                            <div
+                              key={account.id}
+                              className={`flex items-center justify-between p-3 text-sm cursor-pointer transition-colors ${
+                                excluded ? 'bg-primary/5' : 'hover:bg-muted/50'
+                              } ${!configEditing ? 'pointer-events-none opacity-60' : ''}`}
+                              onClick={() => {
+                                if (!configEditing) return
+                                const current = editedConfig?.quality_check_exclusions?.excluded_accounts || []
+                                const updated = excluded
+                                  ? current.filter(id => id !== account.id)
+                                  : [...current, account.id]
+                                updateConfigValue('quality_check_exclusions.excluded_accounts', updated)
+                              }}
+                            >
+                              <span className="font-medium">{account.name}</span>
+                              {excluded && <span className="text-xs text-primary font-medium">✓ Excluded</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
                       <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
                         <p className="font-medium text-foreground">How it works:</p>
                         <p>• Excluded streams: score = M3U account priority value (default 50)</p>
@@ -1235,28 +1098,55 @@ export default function StreamChecker() {
                       <div className="space-y-2">
                         <Label>Per-Account Overrides</Label>
                         <p className="text-xs text-muted-foreground">
-                          Format: one entry per line as <code>account_id:limit</code> (e.g. <code>3:5</code> for account ID 3, max 5 streams). Use 0 for unlimited.
+                          Set a specific stream limit per account. Click an account to toggle override, then set the limit.
                         </p>
-                        <textarea
-                          className="w-full min-h-[120px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                          placeholder={"3:5\n7:2\n12:0"}
-                          disabled={!configEditing}
-                          value={Object.entries(editedConfig?.account_stream_limits?.account_limits || {})
-                            .map(([id, limit]) => `${id}:${limit}`)
-                            .join('\n')}
-                          onChange={(e) => {
-                            const limits = {}
-                            e.target.value.split('\n').forEach(line => {
-                              const parts = line.trim().split(':')
-                              if (parts.length === 2) {
-                                const id = parseInt(parts[0].trim())
-                                const limit = parseInt(parts[1].trim())
-                                if (!isNaN(id) && !isNaN(limit)) limits[id] = limit
-                              }
-                            })
-                            updateConfigValue('account_stream_limits.account_limits', limits)
-                          }}
-                        />
+                        <div className="border rounded-md divide-y overflow-hidden bg-background">
+                          {m3uAccounts.map(account => {
+                            const overrides = editedConfig?.account_stream_limits?.account_limits || {}
+                            const hasOverride = account.id.toString() in overrides
+                            const overrideVal = overrides[account.id.toString()] ?? overrides[account.id] ?? ''
+                            return (
+                              <div key={account.id} className={`flex items-center justify-between p-3 text-sm gap-3 ${!configEditing ? 'opacity-60' : ''}`}>
+                                <span className="font-medium flex-1">{account.name}</span>
+                                {hasOverride ? (
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      className="w-20 h-7 text-xs"
+                                      value={overrideVal}
+                                      disabled={!configEditing}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value) || 0
+                                        const updated = { ...overrides, [account.id]: val }
+                                        updateConfigValue('account_stream_limits.account_limits', updated)
+                                      }}
+                                    />
+                                    <button
+                                      className="text-xs text-muted-foreground hover:text-destructive"
+                                      disabled={!configEditing}
+                                      onClick={() => {
+                                        const updated = { ...overrides }
+                                        delete updated[account.id]
+                                        delete updated[account.id.toString()]
+                                        updateConfigValue('account_stream_limits.account_limits', updated)
+                                      }}
+                                    >✕</button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    className="text-xs text-muted-foreground hover:text-primary disabled:pointer-events-none"
+                                    disabled={!configEditing}
+                                    onClick={() => {
+                                      const updated = { ...overrides, [account.id]: 0 }
+                                      updateConfigValue('account_stream_limits.account_limits', updated)
+                                    }}
+                                  >+ Override</button>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
                       </div>
 
                       <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">

@@ -37,6 +37,7 @@ const DEFAULT_PROFILE = {
         loop_check_enabled: false,
         stream_limit: 0,
         min_resolution: 'any',
+        max_resolution: 'any',
         min_fps: 0,
         min_bitrate: 0,
         m3u_priority: [],
@@ -48,6 +49,8 @@ const DEFAULT_PROFILE = {
         fps: 0.15,
         codec: 0.10,
         prefer_h265: true,
+        avoid_h265: false,
+        scoring_method: 'legacy',
         loop_penalty: 0
     }
 }
@@ -479,7 +482,7 @@ export default function AutomationProfileEditor() {
                                                 <Label>Minimum Quality Requirements</Label>
                                                 <div className="grid grid-cols-2 gap-4">
                                                     <div className="space-y-2">
-                                                        <Label className="text-xs">Resolution</Label>
+                                                        <Label className="text-xs">Min Resolution</Label>
                                                         <Select
                                                             value={profile.stream_checking.min_resolution}
                                                             onValueChange={(val) => updateProfile('stream_checking.min_resolution', val)}
@@ -490,6 +493,21 @@ export default function AutomationProfileEditor() {
                                                                 <SelectItem value="720p">720p+</SelectItem>
                                                                 <SelectItem value="1080p">1080p+</SelectItem>
                                                                 <SelectItem value="4k">4K+</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        <Label className="text-xs">Max Resolution</Label>
+                                                        <Select
+                                                            value={profile.stream_checking.max_resolution ?? 'any'}
+                                                            onValueChange={(val) => updateProfile('stream_checking.max_resolution', val)}
+                                                        >
+                                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="any">Any</SelectItem>
+                                                                <SelectItem value="720p">720p max</SelectItem>
+                                                                <SelectItem value="1080p">1080p max</SelectItem>
+                                                                <SelectItem value="4k">4K max</SelectItem>
                                                             </SelectContent>
                                                         </Select>
                                                     </div>
@@ -594,6 +612,72 @@ export default function AutomationProfileEditor() {
                                                 Adjust how different quality metrics are weighted when scoring streams
                                             </p>
                                         </div>
+
+                                        {/* Scoring Method */}
+                                        <div className="space-y-2">
+                                            <Label className="text-xs">Scoring Method</Label>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div
+                                                    className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                                                        (profile.scoring_weights.scoring_method ?? 'legacy') === 'legacy'
+                                                            ? 'border-primary bg-primary/5'
+                                                            : 'border-border hover:border-primary/50'
+                                                    }`}
+                                                    onClick={() => updateProfile('scoring_weights.scoring_method', 'legacy')}
+                                                >
+                                                    <div className="font-medium text-sm">Legacy (Linear)</div>
+                                                    <p className="text-xs text-muted-foreground mt-1">Weighted sum of bitrate, resolution, FPS, codec.</p>
+                                                </div>
+                                                <div
+                                                    className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                                                        profile.scoring_weights.scoring_method === 'enhanced'
+                                                            ? 'border-primary bg-primary/5'
+                                                            : 'border-border hover:border-primary/50'
+                                                    }`}
+                                                    onClick={() => updateProfile('scoring_weights.scoring_method', 'enhanced')}
+                                                >
+                                                    <div className="font-medium text-sm">Enhanced (Sigmoid)</div>
+                                                    <p className="text-xs text-muted-foreground mt-1">Codec-aware reference bitrates with sigmoid curve.</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Codec Preference */}
+                                        <div className="space-y-2">
+                                            <Label className="text-xs">Codec Preference</Label>
+                                            <div className="flex items-center space-x-3 bg-muted/50 p-3 rounded-md">
+                                                <Switch
+                                                    id="prefer_h265"
+                                                    checked={profile.scoring_weights.prefer_h265 && !profile.scoring_weights.avoid_h265}
+                                                    onCheckedChange={(checked) => {
+                                                        updateProfile('scoring_weights.prefer_h265', checked)
+                                                        if (checked) updateProfile('scoring_weights.avoid_h265', false)
+                                                    }}
+                                                    disabled={profile.scoring_weights.avoid_h265}
+                                                />
+                                                <div className="space-y-0.5">
+                                                    <Label htmlFor="prefer_h265" className="cursor-pointer font-medium text-sm">Prefer H.265/HEVC</Label>
+                                                    <p className="text-[10px] text-muted-foreground">Give preference to H.265 codec over H.264 (Legacy only)</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center space-x-3 bg-muted/50 p-3 rounded-md">
+                                                <Switch
+                                                    id="avoid_h265"
+                                                    checked={profile.scoring_weights.avoid_h265 ?? false}
+                                                    onCheckedChange={(checked) => {
+                                                        updateProfile('scoring_weights.avoid_h265', checked)
+                                                        if (checked) updateProfile('scoring_weights.prefer_h265', false)
+                                                    }}
+                                                />
+                                                <div className="space-y-0.5">
+                                                    <Label htmlFor="avoid_h265" className="cursor-pointer font-medium text-sm">Avoid H.265/HEVC</Label>
+                                                    <p className="text-[10px] text-muted-foreground">Penalize H.265 — prefer H.264 for compatibility (both methods)</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Weights — only relevant for Legacy */}
+                                        {(profile.scoring_weights.scoring_method ?? 'legacy') === 'legacy' && (
                                         <div className="grid gap-4 md:grid-cols-2">
                                             <div className="space-y-2">
                                                 <Label htmlFor="weight_bitrate" className="text-xs">Bitrate Weight</Label>
@@ -672,17 +756,7 @@ export default function AutomationProfileEditor() {
                                                 <p className="text-[10px] text-muted-foreground">Score penalty for looping streams (0 = disabled, min -0.25)</p>
                                             </div>
                                         </div>
-                                        <div className="flex items-center space-x-3 bg-muted/50 p-3 rounded-md">
-                                            <Switch
-                                                id="prefer_h265"
-                                                checked={profile.scoring_weights.prefer_h265}
-                                                onCheckedChange={(checked) => updateProfile('scoring_weights.prefer_h265', checked)}
-                                            />
-                                            <div className="space-y-0.5">
-                                                <Label htmlFor="prefer_h265" className="cursor-pointer font-medium text-sm">Prefer H.265/HEVC</Label>
-                                                <p className="text-[10px] text-muted-foreground">Give preference to H.265 codec over H.264</p>
-                                            </div>
-                                        </div>
+                                        )}
                                     </div>
                                 </div>
                             )}

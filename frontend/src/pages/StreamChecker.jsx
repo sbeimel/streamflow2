@@ -967,8 +967,7 @@ export default function StreamChecker() {
                     />
                   </div>
 
-                  {editedConfig?.quality_check_exclusions?.enabled && (
-                    <div className="space-y-3">
+                  <div className="space-y-3">
                       <Label>Excluded M3U Accounts</Label>
                       <p className="text-xs text-muted-foreground">
                         Streams from these accounts skip FFmpeg analysis and receive a priority-based score instead.
@@ -1005,7 +1004,6 @@ export default function StreamChecker() {
                         <p>• Useful for trusted backup providers or high-volume accounts</p>
                       </div>
                     </div>
-                  )}
                 </TabsContent>
 
                 {/* Immunity Tab */}                <TabsContent value="immunity" className="space-y-4">
@@ -1081,8 +1079,7 @@ export default function StreamChecker() {
                     />
                   </div>
 
-                  {editedConfig?.account_stream_limits?.enabled && (
-                    <div className="space-y-4">
+                  <div className="space-y-4">
                       <div className="space-y-2">
                         <Label htmlFor="global_acct_limit">Global Limit (per account per channel)</Label>
                         <Input
@@ -1092,7 +1089,7 @@ export default function StreamChecker() {
                           max="100"
                           value={editedConfig?.account_stream_limits?.global_limit ?? 0}
                           onChange={(e) => updateConfigValue('account_stream_limits.global_limit', parseInt(e.target.value) || 0)}
-                          disabled={!configEditing}
+                          disabled={!configEditing || !editedConfig?.account_stream_limits?.enabled}
                           className="max-w-[160px]"
                         />
                         <p className="text-xs text-muted-foreground">
@@ -1105,7 +1102,7 @@ export default function StreamChecker() {
                         <p className="text-xs text-muted-foreground">
                           Set a specific stream limit per account. Click an account to toggle override, then set the limit.
                         </p>
-                        <div className="border rounded-md divide-y overflow-hidden bg-background">
+                        <div className={`border rounded-md divide-y overflow-hidden bg-background ${!editedConfig?.account_stream_limits?.enabled ? 'opacity-50 pointer-events-none' : ''}`}>
                           {m3uAccounts.map(account => {
                             const overrides = editedConfig?.account_stream_limits?.account_limits || {}
                             const hasOverride = account.id.toString() in overrides
@@ -1160,7 +1157,6 @@ export default function StreamChecker() {
                         <p className="mt-1">Custom streams (no M3U account) are never affected.</p>
                       </div>
                     </div>
-                  )}
                 </TabsContent>
 
                 {/* Dead Streams Tab */}

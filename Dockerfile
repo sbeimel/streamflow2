@@ -1,7 +1,25 @@
-# Build for StreamFlow application
-# Includes Flask API in a single container
-# Frontend should be pre-built and copied to build context
+# Multi-stage build for StreamFlow application
+# Stage 1: Build the React frontend
+# Stage 2: Python backend with pre-built static files
 
+# ── Stage 1: Frontend Build ───────────────────────────────────────────────────
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /frontend
+
+# Copy package files first for better layer caching
+COPY frontend/package.json frontend/package-lock.json ./
+
+# Install dependencies (use ci for reproducible builds)
+RUN npm ci --prefer-offline 2>/dev/null || npm install
+
+# Copy frontend source
+COPY frontend/ ./
+
+# Build production bundle
+RUN npm run build
+
+# ── Stage 2: Python Backend ───────────────────────────────────────────────────
 FROM python:3.11-slim
 
 # Install system dependencies
@@ -22,8 +40,8 @@ RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pyth
 # Copy backend application code
 COPY backend/ ./
 
-# Copy pre-built frontend to static directory
-COPY frontend/build ./static
+# Copy pre-built frontend from Stage 1
+COPY --from=frontend-builder /frontend/build ./static
 
 # Create necessary directories
 # data directory will be mounted as volume for persistence
@@ -47,4 +65,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Use entrypoint script to start Flask API
 ENTRYPOINT ["/app/entrypoint.sh"]
-

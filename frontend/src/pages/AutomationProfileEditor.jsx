@@ -552,7 +552,9 @@ export default function AutomationProfileEditor() {
                                             <div className="space-y-2">
                                                 <Label className="text-xs">Playlist Priority Rank</Label>
                                                 <div className="border rounded-md divide-y overflow-hidden bg-background">
-                                                    {(() => {
+                                                    {m3uAccounts.length === 0 ? (
+                                                        <div className="p-3 text-xs text-muted-foreground">Loading accounts...</div>
+                                                    ) : (() => {
                                                         const allAvailableIds = m3uAccounts.map(a => a.id)
                                                         const pOrder = profile.stream_checking.m3u_priority || []
                                                         const sortedIds = [...new Set([...pOrder, ...allAvailableIds])]
@@ -597,7 +599,7 @@ export default function AutomationProfileEditor() {
                                                                 </div>
                                                             )
                                                         })
-                                                    })()}
+                                                    })()} 
                                                 </div>
                                             </div>
                                         </div>

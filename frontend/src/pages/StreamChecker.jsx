@@ -11,7 +11,7 @@ import { Separator } from '@/components/ui/separator.jsx'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.jsx'
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from '@/components/ui/pagination.jsx'
 import { useToast } from '@/hooks/use-toast.js'
-import { streamCheckerAPI, deadStreamsAPI, m3uAPI } from '@/services/api.js'
+import { streamCheckerAPI, deadStreamsAPI } from '@/services/api.js'
 import {
   Activity,
   CheckCircle2,
@@ -52,15 +52,7 @@ export default function StreamChecker() {
     has_prev: false
   })
   const [totalDeadStreams, setTotalDeadStreams] = useState(0)
-  const [m3uAccounts, setM3uAccounts] = useState([])
   const { toast } = useToast()
-
-  useEffect(() => {
-    // Load M3U accounts once on mount — they don't change during polling
-    m3uAPI.getAccounts()
-      .then(res => setM3uAccounts(res.data.accounts || []))
-      .catch(err => console.error('Failed to load M3U accounts:', err))
-  }, [])
 
   useEffect(() => {
     loadData()
@@ -967,35 +959,27 @@ export default function StreamChecker() {
                     />
                   </div>
 
-                  <div className="space-y-3">
-                      <Label>Excluded M3U Accounts</Label>
+                  {editedConfig?.quality_check_exclusions?.enabled && (
+                    <div className="space-y-3">
+                      <Label>Excluded M3U Account IDs</Label>
                       <p className="text-xs text-muted-foreground">
-                        Streams from these accounts skip FFmpeg analysis and receive a priority-based score instead.
+                        Enter the numeric M3U account IDs to exclude (one per line or comma-separated).
+                        Find IDs in Dispatcharr under M3U Accounts.
                       </p>
-                      <div className="border rounded-md divide-y overflow-hidden bg-background">
-                        {m3uAccounts.map(account => {
-                          const excluded = (editedConfig?.quality_check_exclusions?.excluded_accounts || []).includes(account.id)
-                          return (
-                            <div
-                              key={account.id}
-                              className={`flex items-center justify-between p-3 text-sm cursor-pointer transition-colors ${
-                                excluded ? 'bg-primary/5' : 'hover:bg-muted/50'
-                              } ${!configEditing ? 'pointer-events-none opacity-60' : ''}`}
-                              onClick={() => {
-                                if (!configEditing) return
-                                const current = editedConfig?.quality_check_exclusions?.excluded_accounts || []
-                                const updated = excluded
-                                  ? current.filter(id => id !== account.id)
-                                  : [...current, account.id]
-                                updateConfigValue('quality_check_exclusions.excluded_accounts', updated)
-                              }}
-                            >
-                              <span className="font-medium">{account.name}</span>
-                              {excluded && <span className="text-xs text-primary font-medium">✓ Excluded</span>}
-                            </div>
-                          )
-                        })}
-                      </div>
+                      <textarea
+                        className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                        placeholder="e.g. 4, 5, 12"
+                        disabled={!configEditing}
+                        value={(editedConfig?.quality_check_exclusions?.excluded_accounts || []).join(', ')}
+                        onChange={(e) => {
+                          const raw = e.target.value
+                          const ids = raw
+                            .split(/[\s,]+/)
+                            .map(v => parseInt(v.trim(), 10))
+                            .filter(v => !isNaN(v))
+                          updateConfigValue('quality_check_exclusions.excluded_accounts', ids)
+                        }}
+                      />
                       <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
                         <p className="font-medium text-foreground">How it works:</p>
                         <p>• Excluded streams: score = M3U account priority value (default 50)</p>
@@ -1004,6 +988,7 @@ export default function StreamChecker() {
                         <p>• Useful for trusted backup providers or high-volume accounts</p>
                       </div>
                     </div>
+                  )}
                 </TabsContent>
 
                 {/* Immunity Tab */}                <TabsContent value="immunity" className="space-y-4">
@@ -1079,7 +1064,8 @@ export default function StreamChecker() {
                     />
                   </div>
 
-                  <div className="space-y-4">
+                  {editedConfig?.account_stream_limits?.enabled && (
+                    <div className="space-y-4">
                       <div className="space-y-2">
                         <Label htmlFor="global_acct_limit">Global Limit (per account per channel)</Label>
                         <Input
@@ -1089,7 +1075,7 @@ export default function StreamChecker() {
                           max="100"
                           value={editedConfig?.account_stream_limits?.global_limit ?? 0}
                           onChange={(e) => updateConfigValue('account_stream_limits.global_limit', parseInt(e.target.value) || 0)}
-                          disabled={!configEditing || !editedConfig?.account_stream_limits?.enabled}
+                          disabled={!configEditing}
                           className="max-w-[160px]"
                         />
                         <p className="text-xs text-muted-foreground">
@@ -1100,55 +1086,28 @@ export default function StreamChecker() {
                       <div className="space-y-2">
                         <Label>Per-Account Overrides</Label>
                         <p className="text-xs text-muted-foreground">
-                          Set a specific stream limit per account. Click an account to toggle override, then set the limit.
+                          Format: one entry per line as <code>account_id:limit</code> (e.g. <code>3:5</code> for account ID 3, max 5 streams). Use 0 for unlimited.
                         </p>
-                        <div className={`border rounded-md divide-y overflow-hidden bg-background ${!editedConfig?.account_stream_limits?.enabled ? 'opacity-50 pointer-events-none' : ''}`}>
-                          {m3uAccounts.map(account => {
-                            const overrides = editedConfig?.account_stream_limits?.account_limits || {}
-                            const hasOverride = account.id.toString() in overrides
-                            const overrideVal = overrides[account.id.toString()] ?? overrides[account.id] ?? ''
-                            return (
-                              <div key={account.id} className={`flex items-center justify-between p-3 text-sm gap-3 ${!configEditing ? 'opacity-60' : ''}`}>
-                                <span className="font-medium flex-1">{account.name}</span>
-                                {hasOverride ? (
-                                  <div className="flex items-center gap-2">
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      className="w-20 h-7 text-xs"
-                                      value={overrideVal}
-                                      disabled={!configEditing}
-                                      onChange={(e) => {
-                                        const val = parseInt(e.target.value) || 0
-                                        const updated = { ...overrides, [account.id]: val }
-                                        updateConfigValue('account_stream_limits.account_limits', updated)
-                                      }}
-                                    />
-                                    <button
-                                      className="text-xs text-muted-foreground hover:text-destructive"
-                                      disabled={!configEditing}
-                                      onClick={() => {
-                                        const updated = { ...overrides }
-                                        delete updated[account.id]
-                                        delete updated[account.id.toString()]
-                                        updateConfigValue('account_stream_limits.account_limits', updated)
-                                      }}
-                                    >✕</button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    className="text-xs text-muted-foreground hover:text-primary disabled:pointer-events-none"
-                                    disabled={!configEditing}
-                                    onClick={() => {
-                                      const updated = { ...overrides, [account.id]: 0 }
-                                      updateConfigValue('account_stream_limits.account_limits', updated)
-                                    }}
-                                  >+ Override</button>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
+                        <textarea
+                          className="w-full min-h-[120px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                          placeholder={"3:5\n7:2\n12:0"}
+                          disabled={!configEditing}
+                          value={Object.entries(editedConfig?.account_stream_limits?.account_limits || {})
+                            .map(([id, limit]) => `${id}:${limit}`)
+                            .join('\n')}
+                          onChange={(e) => {
+                            const limits = {}
+                            e.target.value.split('\n').forEach(line => {
+                              const parts = line.trim().split(':')
+                              if (parts.length === 2) {
+                                const id = parseInt(parts[0].trim())
+                                const limit = parseInt(parts[1].trim())
+                                if (!isNaN(id) && !isNaN(limit)) limits[id] = limit
+                              }
+                            })
+                            updateConfigValue('account_stream_limits.account_limits', limits)
+                          }}
+                        />
                       </div>
 
                       <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
@@ -1157,6 +1116,7 @@ export default function StreamChecker() {
                         <p className="mt-1">Custom streams (no M3U account) are never affected.</p>
                       </div>
                     </div>
+                  )}
                 </TabsContent>
 
                 {/* Dead Streams Tab */}

@@ -3388,9 +3388,23 @@ class AutomatedStreamManager:
 
         def _run():
             try:
+                # Step 0: sync UDI cache so streams and accounts are available
+                try:
+                    udi = get_udi_manager()
+                    udi.refresh_all()
+                    logger.info("Discover & Assign: UDI cache synced")
+                except Exception as udi_exc:
+                    logger.warning(f"Discover & Assign: UDI sync failed, continuing anyway: {udi_exc}")
                 # Step 1: refresh playlists
                 self.refresh_playlists(force=True, skip_changelog=False)
-                # Step 2: discover and assign streams, skip check trigger
+                # Step 2: sync UDI again after playlist refresh to pick up new streams
+                try:
+                    udi = get_udi_manager()
+                    udi.refresh_streams()
+                    logger.info("Discover & Assign: UDI streams refreshed after playlist update")
+                except Exception as udi_exc:
+                    logger.warning(f"Discover & Assign: post-refresh UDI sync failed: {udi_exc}")
+                # Step 3: discover and assign streams, skip check trigger
                 self.discover_and_assign_streams(force=True, skip_check_trigger=True, skip_changelog=False)
                 logger.info("Discover & Assign: completed")
             except Exception as exc:

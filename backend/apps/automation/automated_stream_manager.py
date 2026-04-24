@@ -2220,7 +2220,10 @@ class AutomatedStreamManager:
                             continue
                         
                         # Normal channel assignment (not in session)
-                        added_count = add_streams_to_channel(channel_id_int, stream_ids, allow_dead_streams=(not dead_stream_removal_enabled))
+                        # allow_dead_streams if: global removal disabled OR this channel has revive enabled
+                        channel_revive_enabled = channel_to_revive_enabled.get(str(channel_id), False)
+                        _allow_dead = (not dead_stream_removal_enabled) or channel_revive_enabled
+                        added_count = add_streams_to_channel(channel_id_int, stream_ids, allow_dead_streams=_allow_dead)
                         assignment_count[channel_id] = added_count
                         
                         # Verify streams were added correctly (if enabled in config)

@@ -1833,7 +1833,11 @@ class StreamCheckerService:
             reordered_ids = [s.get('stream_id') for s in analyzed_streams if s.get('stream_id') is not None]
             # Dead streams have already been filtered from analyzed_streams if removal is enabled
             # If removal is disabled, allow them to remain in the channel
-            update_channel_streams(channel_id, reordered_ids, allow_dead_streams=(not dead_stream_removal_enabled))
+            # Skip update if check was aborted — partial results must not overwrite the channel
+            if self.abort_current_check.is_set():
+                logger.warning(f"Check was aborted for channel {channel_name} — skipping channel update to preserve existing stream order")
+            else:
+                update_channel_streams(channel_id, reordered_ids, allow_dead_streams=(not dead_stream_removal_enabled))
             
             # Verify the update
             self.progress.update(
@@ -2731,7 +2735,11 @@ class StreamCheckerService:
             reordered_ids = [s.get('stream_id') for s in analyzed_streams if s.get('stream_id') is not None]
             # Dead streams have already been filtered from analyzed_streams if removal is enabled
             # If removal is disabled, allow them to remain in the channel
-            update_channel_streams(channel_id, reordered_ids, allow_dead_streams=(not dead_stream_removal_enabled))
+            # Skip update if check was aborted — partial results must not overwrite the channel
+            if self.abort_current_check.is_set():
+                logger.warning(f"Check was aborted for channel {channel_name} — skipping channel update to preserve existing stream order")
+            else:
+                update_channel_streams(channel_id, reordered_ids, allow_dead_streams=(not dead_stream_removal_enabled))
             
             # Verify the update was applied correctly
             self.progress.update(

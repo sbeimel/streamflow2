@@ -212,7 +212,11 @@ class StreamCheckerService:
         # Event for aborting current channel check
         self.abort_current_check = threading.Event()
         logger.debug("Abort current check event created")
-        
+
+        # Targeted stream IDs for test_streams_without_stats
+        # Maps channel_id -> [stream_ids] that need re-analysis
+        self._pending_target_stream_ids: Dict[int, List[int]] = {}
+
         logger.info("Stream Checker Service initialized")
         log_function_return(logger, "__init__")
     
@@ -284,8 +288,17 @@ class StreamCheckerService:
                 logger.debug(f"Worker processing channel {channel_id}")
                 # Clear abort flag before checking
                 self.abort_current_check.clear()
-                # Check this channel
-                self._check_channel(channel_id)
+                # Check this channel — use targeted stream list if set by test_streams_without_stats
+                _target = self._pending_target_stream_ids.pop(channel_id, None)
+                concurrent_enabled = self.config.get('concurrent_streams.enabled', True)
+                if _target is not None:
+                    logger.debug(f"Worker: targeted check for channel {channel_id} ({len(_target)} stream(s))")
+                    if concurrent_enabled:
+                        self._check_channel_concurrent(channel_id, target_stream_ids=_target)
+                    else:
+                        self._check_channel_sequential(channel_id, target_stream_ids=_target)
+                else:
+                    self._check_channel(channel_id)
                 logger.debug(f"Worker completed channel {channel_id}")
                 
             except Exception as e:
@@ -4422,6 +4435,7 @@ class StreamCheckerService:
         self.check_queue.clear()
         self.abort_current_check.set()
         self._cancel_queueing = True
+        self._pending_target_stream_ids.clear()  # Clear targeted stream IDs from test_streams_without_stats
         logger.info("Checking queue cleared and current check aborted")
     
     def trigger_check_updated_channels(self):
@@ -4537,8 +4551,12 @@ class StreamCheckerService:
             return {'success': False, 'error': str(e), 'queued': 0}
 
     def test_streams_without_stats(self) -> Dict:
-        """Find streams with missing or incomplete stats and queue their channels for checking.
-        
+        """Find streams with missing or incomplete stats and queue ONLY those streams for checking.
+
+        Uses target_stream_ids so that only the incomplete streams within each
+        affected channel are re-analysed via FFmpeg — streams that already have
+        complete stats are left untouched.
+
         Targets streams that have never been analyzed (no stream_stats) or have
         incomplete stats (missing resolution, codec, or bitrate data).
         
@@ -4581,7 +4599,8 @@ class StreamCheckerService:
                 
                 return False
 
-            channels_to_queue = set()
+            # channel_id -> list of stream_ids that need checking
+            target_stream_ids: Dict[int, List[int]] = {}
             streams_found = 0
 
             for channel in channels:
@@ -4598,9 +4617,11 @@ class StreamCheckerService:
                     stream_stats = stream.get('stream_stats')
                     if _is_incomplete(stream_stats):
                         streams_found += 1
-                        channels_to_queue.add(channel_id)
+                        if channel_id not in target_stream_ids:
+                            target_stream_ids[channel_id] = []
+                        target_stream_ids[channel_id].append(stream_id)
 
-            if not channels_to_queue:
+            if not target_stream_ids:
                 return {
                     'success': True,
                     'message': 'No streams with missing or incomplete stats found',
@@ -4608,20 +4629,31 @@ class StreamCheckerService:
                     'channels_queued': 0
                 }
 
-            # Mark channels for force check and queue them
+            channels_to_queue = list(target_stream_ids.keys())
+
+            # Mark channels for force check (bypasses 2-hour immunity)
             for cid in channels_to_queue:
                 self.update_tracker.mark_channel_for_force_check(cid)
                 self.check_queue.remove_from_completed(cid)
 
-            added = self.check_queue.add_channels(list(channels_to_queue), priority=15)
-            logger.info(f"Test Without Stats: found {streams_found} streams in {len(channels_to_queue)} channels, queued {added}")
-            
+            added = self.check_queue.add_channels(channels_to_queue, priority=15)
+            logger.info(
+                f"Test Without Stats: found {streams_found} incomplete stream(s) in "
+                f"{len(channels_to_queue)} channel(s), queued {added} "
+                f"(targeted check — only incomplete streams will be re-analysed)"
+            )
+
+            # Store target_stream_ids so the worker can pass them to _check_channel.
+            # Uses the existing targeted-check infrastructure (target_stream_ids param).
+            # Update (not replace) to avoid losing entries from concurrent calls.
+            self._pending_target_stream_ids.update(target_stream_ids)
+
             return {
                 'success': True,
                 'streams_found': streams_found,
                 'channels_affected': len(channels_to_queue),
                 'channels_queued': added,
-                'message': f'Queued {added} channel(s) containing {streams_found} stream(s) with missing/incomplete stats'
+                'message': f'Queued {added} channel(s) — only {streams_found} incomplete stream(s) will be re-analysed (not all streams)'
             }
         except Exception as e:
             logger.error(f"Test Without Stats failed: {e}")

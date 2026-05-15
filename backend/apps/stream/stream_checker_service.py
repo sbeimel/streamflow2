@@ -216,6 +216,10 @@ class StreamCheckerService:
         # Targeted stream IDs for test_streams_without_stats
         # Maps channel_id -> [stream_ids] that need re-analysis
         self._pending_target_stream_ids: Dict[int, List[int]] = {}
+        
+        # Rescore mode channels - channels queued via rescore_and_resort
+        # that should check cached streams against profile thresholds
+        self._rescore_mode_channels: set = set()
 
         logger.info("Stream Checker Service initialized")
         log_function_return(logger, "__init__")
@@ -288,17 +292,27 @@ class StreamCheckerService:
                 logger.debug(f"Worker processing channel {channel_id}")
                 # Clear abort flag before checking
                 self.abort_current_check.clear()
+                
+                # Check if this is a rescore mode channel
+                rescore_mode = channel_id in self._rescore_mode_channels
+                if rescore_mode:
+                    self._rescore_mode_channels.discard(channel_id)
+                    logger.debug(f"Worker: rescore mode enabled for channel {channel_id} (cached streams will be checked against thresholds)")
+                
                 # Check this channel — use targeted stream list if set by test_streams_without_stats
                 _target = self._pending_target_stream_ids.pop(channel_id, None)
                 concurrent_enabled = self.config.get('concurrent_streams.enabled', True)
                 if _target is not None:
                     logger.debug(f"Worker: targeted check for channel {channel_id} ({len(_target)} stream(s))")
                     if concurrent_enabled:
-                        self._check_channel_concurrent(channel_id, target_stream_ids=_target)
+                        self._check_channel_concurrent(channel_id, target_stream_ids=_target, rescore_mode=rescore_mode)
                     else:
-                        self._check_channel_sequential(channel_id, target_stream_ids=_target)
+                        self._check_channel_sequential(channel_id, target_stream_ids=_target, rescore_mode=rescore_mode)
                 else:
-                    self._check_channel(channel_id)
+                    if concurrent_enabled:
+                        self._check_channel_concurrent(channel_id, rescore_mode=rescore_mode)
+                    else:
+                        self._check_channel_sequential(channel_id, rescore_mode=rescore_mode)
                 logger.debug(f"Worker completed channel {channel_id}")
                 
             except Exception as e:
@@ -1028,7 +1042,7 @@ class StreamCheckerService:
         else:
             return self._check_channel_sequential(channel_id, skip_batch_changelog=skip_batch_changelog, forced_profile_id=forced_profile_id)
     
-    def _check_channel_concurrent(self, channel_id: int, skip_batch_changelog: bool = False, target_stream_ids: Optional[List[str]] = None, forced_profile_id: Optional[str] = None):
+    def _check_channel_concurrent(self, channel_id: int, skip_batch_changelog: bool = False, target_stream_ids: Optional[List[str]] = None, forced_profile_id: Optional[str] = None, rescore_mode: bool = False):
         """Check and reorder streams for a specific channel using parallel thread pool.
         
         Args:
@@ -1036,6 +1050,10 @@ class StreamCheckerService:
             skip_batch_changelog: If True, don't add this check to the batch changelog
             target_stream_ids: Optional list of stream IDs. If provided, ONLY these
                                streams will be checked, bypassing all other logic.
+            forced_profile_id: Optional profile ID to use instead of active period profile
+            rescore_mode: If True, cached streams will be checked against profile thresholds
+                         (min_resolution, max_resolution, min_bitrate, min_fps) and marked
+                         as dead if they don't meet requirements. Used by rescore_and_resort.
         """
         import time as time_module
         from apps.stream.stream_check_utils import analyze_stream
@@ -1705,6 +1723,25 @@ class StreamCheckerService:
                             'score': 0.0 # Will be calculated below
                         }
                         
+                        # RESCORE MODE: Check cached streams against profile thresholds
+                        # When rescore_mode=True (from rescore_and_resort), cached streams
+                        # are checked against min_resolution, max_resolution, min_bitrate,
+                        # min_fps and marked as dead if they don't meet requirements.
+                        if rescore_mode:
+                            is_dead, dead_reason = self._is_stream_dead(
+                                cached_analyzed, 
+                                channel_id, 
+                                threshold_config=_threshold_config
+                            )
+                            if is_dead:
+                                dead_stream_ids.add(stream_id)
+                                logger.info(
+                                    f"[rescore] Cached stream {stream_id} marked as dead: "
+                                    f"{stream.get('name', 'Unknown')} (reason={dead_reason})"
+                                )
+                                # Skip adding to analyzed_streams - will be filtered out
+                                continue
+                        
                         # Calculate score using CURRENT profile weights
                         score = self._calculate_stream_score(cached_analyzed, priority_m3u_ids, priority_mode, scoring_weights)
                         cached_analyzed['score'] = score
@@ -2048,7 +2085,7 @@ class StreamCheckerService:
             log_function_return(logger, "_check_channel_concurrent")
 
     
-    def _check_channel_sequential(self, channel_id: int, skip_batch_changelog: bool = False, target_stream_ids: Optional[List[str]] = None, forced_profile_id: Optional[str] = None):
+    def _check_channel_sequential(self, channel_id: int, skip_batch_changelog: bool = False, target_stream_ids: Optional[List[str]] = None, forced_profile_id: Optional[str] = None, rescore_mode: bool = False):
         """Check and reorder streams for a specific channel using sequential checking.
         
         Args:
@@ -2056,6 +2093,10 @@ class StreamCheckerService:
             skip_batch_changelog: If True, don't add this check to the batch changelog
             target_stream_ids: Optional list of stream IDs. If provided, ONLY these
                                streams will be checked, bypassing all other logic.
+            forced_profile_id: Optional profile ID to use instead of active period profile
+            rescore_mode: If True, cached streams will be checked against profile thresholds
+                         (min_resolution, max_resolution, min_bitrate, min_fps) and marked
+                         as dead if they don't meet requirements. Used by rescore_and_resort.
         """
         import time as time_module
         start_time = time_module.time()
@@ -2555,6 +2596,25 @@ class StreamCheckerService:
                     # elif is_dead and was_dead:
                     #     logger.debug(f"Cached stream {stream['id']} remains dead (already marked)")
                     #     dead_stream_ids.add(stream['id'])
+                    
+                    # RESCORE MODE: Check cached streams against profile thresholds
+                    # When rescore_mode=True (from rescore_and_resort), cached streams
+                    # are checked against min_resolution, max_resolution, min_bitrate,
+                    # min_fps and marked as dead if they don't meet requirements.
+                    if rescore_mode:
+                        is_dead, dead_reason = self._is_stream_dead(
+                            analyzed, 
+                            channel_id, 
+                            threshold_config=_threshold_config
+                        )
+                        if is_dead:
+                            dead_stream_ids.add(stream['id'])
+                            logger.info(
+                                f"[rescore] Cached stream {stream['id']} marked as dead: "
+                                f"{stream.get('name', 'Unknown')} (reason={dead_reason})"
+                            )
+                            # Skip adding to analyzed_streams - will be filtered out
+                            continue
                     
                     # Calculate score using stored stats and CURRENT profile weights
                     score = self._calculate_stream_score(analyzed, priority_m3u_ids, priority_mode, scoring_weights)
@@ -4436,6 +4496,7 @@ class StreamCheckerService:
         self.abort_current_check.set()
         self._cancel_queueing = True
         self._pending_target_stream_ids.clear()  # Clear targeted stream IDs from test_streams_without_stats
+        self._rescore_mode_channels.clear()  # Clear rescore mode channels
         logger.info("Checking queue cleared and current check aborted")
     
     def trigger_check_updated_channels(self):
@@ -4528,6 +4589,9 @@ class StreamCheckerService:
         Queues all channels for checking. The worker will use cached stream stats
         and re-apply current scoring weights and preferences, then re-sort.
         
+        Cached streams will be checked against current profile thresholds (min_resolution,
+        max_resolution, min_bitrate, min_fps) and removed if they don't meet requirements.
+        
         Returns:
             Dict with queued channel count
         """
@@ -4543,8 +4607,11 @@ class StreamCheckerService:
             for cid in channel_ids:
                 self.check_queue.remove_from_completed(cid)
             
+            # Mark channels for rescore mode so cached streams are checked against thresholds
+            self._rescore_mode_channels = set(channel_ids)
+            
             added = self.check_queue.add_channels(channel_ids, priority=8)
-            logger.info(f"Rescore & Resort: queued {added}/{len(channel_ids)} channels")
+            logger.info(f"Rescore & Resort: queued {added}/{len(channel_ids)} channels (cached streams will be checked against profile thresholds)")
             return {'success': True, 'queued': added, 'total': len(channel_ids)}
         except Exception as e:
             logger.error(f"Rescore & Resort failed: {e}")

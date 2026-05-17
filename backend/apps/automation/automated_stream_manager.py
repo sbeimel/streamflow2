@@ -2226,6 +2226,11 @@ class AutomatedStreamManager:
                         added_count = add_streams_to_channel(channel_id_int, stream_ids, allow_dead_streams=_allow_dead)
                         assignment_count[channel_id] = added_count
                         
+                        # Brief pause between channel assignments to avoid overloading Dispatcharr
+                        # with rapid sequential PATCH requests (reduces HTTP 500 errors)
+                        if added_count > 0:
+                            time.sleep(0.3)
+                        
                         # Verify streams were added correctly (if enabled in config)
                         verify_enabled = self.config.get('verify_stream_assignments', False)
                         if added_count > 0 and verify_enabled:

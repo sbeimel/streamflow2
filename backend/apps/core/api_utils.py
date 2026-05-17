@@ -350,7 +350,7 @@ def fetch_data_from_url(url: str) -> Optional[Any]:
         log_exception(logger, e, f"fetch_data_from_url ({url})")
         return None
 
-def patch_request(url: str, payload: Dict[str, Any], max_retries: int = 2) -> requests.Response:
+def patch_request(url: str, payload: Dict[str, Any], max_retries: int = 5) -> requests.Response:
     """
     Send a PATCH request with authentication and retry logic.
     
@@ -361,7 +361,7 @@ def patch_request(url: str, payload: Dict[str, Any], max_retries: int = 2) -> re
     Parameters:
         url (str): The URL to send the PATCH request to.
         payload (Dict[str, Any]): The JSON payload to send.
-        max_retries (int): Maximum attempts for transient 500 errors.
+        max_retries (int): Maximum attempts for transient 500 errors (default: 5).
         
     Returns:
         requests.Response: The response object from the request.
@@ -369,6 +369,7 @@ def patch_request(url: str, payload: Dict[str, Any], max_retries: int = 2) -> re
     Raises:
         requests.exceptions.RequestException: If request fails.
     """
+    import time as _time
     retries = 0
     while retries <= max_retries:
         try:
@@ -389,9 +390,9 @@ def patch_request(url: str, payload: Dict[str, Any], max_retries: int = 2) -> re
                 else:
                     raise
             elif e.response.status_code >= 500 and retries < max_retries:
-                logger.warning(f"Got HTTP {e.response.status_code} patching data to {url}. Retrying {retries+1}/{max_retries}...")
-                import time
-                time.sleep(2)
+                wait = 2 * (retries + 1)  # Progressive backoff: 2s, 4s, 6s, 8s, 10s
+                logger.warning(f"Got HTTP {e.response.status_code} patching data to {url}. Retrying {retries+1}/{max_retries} (wait {wait}s)...")
+                _time.sleep(wait)
                 retries += 1
                 continue
             else:
@@ -401,9 +402,9 @@ def patch_request(url: str, payload: Dict[str, Any], max_retries: int = 2) -> re
                 raise
         except requests.exceptions.RequestException as e:
             if retries < max_retries:
-                logger.warning(f"Network error patching data to {url}: {e}. Retrying {retries+1}/{max_retries}...")
-                import time
-                time.sleep(2)
+                wait = 2 * (retries + 1)
+                logger.warning(f"Network error patching data to {url}: {e}. Retrying {retries+1}/{max_retries} (wait {wait}s)...")
+                _time.sleep(wait)
                 retries += 1
                 continue
             logger.error(f"Error patching data to {url}: {e}")
@@ -545,23 +546,17 @@ def update_channel_streams(
                 f"Successfully updated channel {channel_id} with "
                 f"{len(filtered_stream_ids)} streams"
             )
-            
             # Refresh the channel in UDI cache to ensure fresh stream data
-            # This is critical for immediate stream checking after assignment
             try:
                 udi = get_udi_manager()
                 udi.refresh_channel_by_id(channel_id)
                 logger.debug(f"Refreshed UDI cache for channel {channel_id} after stream update")
             except Exception as e:
                 logger.warning(f"Failed to refresh UDI cache for channel {channel_id}: {e}")
-            
             return True
         else:
             status = response.status_code if response else 'None'
-            logger.warning(
-                f"Unexpected response for channel {channel_id}: "
-                f"{status}"
-            )
+            logger.warning(f"Unexpected response for channel {channel_id}: {status}")
             return False
     except requests.exceptions.HTTPError as e:
         # Handle "Invalid pk" errors by refreshing UDI and retrying with validated IDs

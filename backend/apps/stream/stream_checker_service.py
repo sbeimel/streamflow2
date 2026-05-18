@@ -1730,23 +1730,66 @@ class StreamCheckerService:
                             'score': 0.0 # Will be calculated below
                         }
                         
-                        # RESCORE MODE: Check cached streams against profile thresholds
-                        # When rescore_mode=True (from rescore_and_resort), cached streams
-                        # are checked against min_resolution, max_resolution, min_bitrate,
-                        # min_fps and marked as dead if they don't meet requirements.
+                        # RESCORE MODE: Check cached streams against profile thresholds ONLY.
+                        # Uses stats already stored in the database — no FFmpeg needed.
+                        # Rules:
+                        #   - Streams without stats → always remove (should never be assigned)
+                        #   - Streams with stats below threshold → remove
+                        #   - Streams with stats above threshold → keep + sort
                         if rescore_mode:
-                            is_dead, dead_reason = self._is_stream_dead(
-                                cached_analyzed, 
-                                channel_id, 
-                                threshold_config=_threshold_config
+                            _res   = cached_analyzed.get('resolution', 'N/A')
+                            _brate = cached_analyzed.get('bitrate_kbps')
+                            _fps   = cached_analyzed.get('fps')
+                            _has_stats = (
+                                _res not in ('N/A', '', None, '0x0') and
+                                isinstance(_brate, (int, float)) and _brate > 0
                             )
-                            if is_dead:
-                                dead_stream_ids.add(stream_id)
+                            _below = False
+
+                            if not _has_stats:
+                                # No stats → remove always
+                                _below = True
                                 logger.info(
-                                    f"[rescore] Cached stream {stream_id} marked as dead: "
-                                    f"{stream.get('name', 'Unknown')} (reason={dead_reason})"
+                                    f"[rescore] Stream {stream_id} has no stats — removing: "
+                                    f"{stream.get('name', 'Unknown')}"
                                 )
-                                # Skip adding to analyzed_streams - will be filtered out
+                            elif _threshold_config:
+                                # Has stats → check thresholds
+                                if _res and 'x' in str(_res):
+                                    try:
+                                        _w, _h = map(int, str(_res).split('x'))
+                                        if _w > 0 and _h > 0:
+                                            _min_w = _threshold_config.get('min_resolution_width', 0)
+                                            _min_h = _threshold_config.get('min_resolution_height', 0)
+                                            _max_h = _threshold_config.get('max_resolution_height', 0)
+                                            if _min_w > 0 and _w < _min_w:
+                                                _below = True
+                                            elif _min_h > 0 and _h < _min_h:
+                                                _below = True
+                                            elif _max_h > 0 and _h > _max_h:
+                                                _below = True
+                                    except (ValueError, IndexError):
+                                        pass
+
+                                if not _below and isinstance(_brate, (int, float)) and _brate > 0:
+                                    _min_brate = _threshold_config.get('min_bitrate_kbps', 0)
+                                    if _min_brate > 0 and _brate < _min_brate:
+                                        _below = True
+
+                                if not _below and isinstance(_fps, (int, float)) and _fps > 0:
+                                    _min_fps = _threshold_config.get('min_fps', 0)
+                                    if _min_fps > 0 and _fps < _min_fps:
+                                        _below = True
+
+                                if _below:
+                                    logger.info(
+                                        f"[rescore] Stream {stream_id} below threshold: "
+                                        f"{stream.get('name', 'Unknown')} "
+                                        f"res={_res} bitrate={_brate} fps={_fps}"
+                                    )
+
+                            if _below:
+                                dead_stream_ids.add(stream_id)
                                 continue
                         
                         # Calculate score using CURRENT profile weights
@@ -2611,23 +2654,69 @@ class StreamCheckerService:
                     #     logger.debug(f"Cached stream {stream['id']} remains dead (already marked)")
                     #     dead_stream_ids.add(stream['id'])
                     
-                    # RESCORE MODE: Check cached streams against profile thresholds
-                    # When rescore_mode=True (from rescore_and_resort), cached streams
-                    # are checked against min_resolution, max_resolution, min_bitrate,
-                    # min_fps and marked as dead if they don't meet requirements.
+                    # RESCORE MODE: Check cached streams against profile thresholds ONLY.
+                    # Uses stats already stored in the database — no FFmpeg needed.
+                    # Rules:
+                    #   - Streams without stats → always remove (should never be assigned)
+                    #   - Streams with stats below threshold → remove
+                    #   - Streams with stats above threshold → keep + sort
                     if rescore_mode:
-                        is_dead, dead_reason = self._is_stream_dead(
-                            analyzed, 
-                            channel_id, 
-                            threshold_config=_threshold_config
+                        _res   = analyzed.get('resolution', 'N/A')
+                        _brate = analyzed.get('bitrate_kbps')
+                        _fps   = analyzed.get('fps')
+                        _has_stats = (
+                            _res not in ('N/A', '', None, '0x0') and
+                            isinstance(_brate, (int, float)) and _brate > 0
                         )
-                        if is_dead:
-                            dead_stream_ids.add(stream['id'])
+                        _below = False
+
+                        if not _has_stats:
+                            # No stats → remove always
+                            _below = True
                             logger.info(
-                                f"[rescore] Cached stream {stream['id']} marked as dead: "
-                                f"{stream.get('name', 'Unknown')} (reason={dead_reason})"
+                                f"[rescore] Stream {stream['id']} has no stats — removing: "
+                                f"{stream.get('name', 'Unknown')}"
                             )
-                            # Skip adding to analyzed_streams - will be filtered out
+                        elif _threshold_config:
+                            # Has stats → check thresholds
+                            if _res and 'x' in str(_res).lower():
+                                try:
+                                    import re as _re
+                                    _parts = _re.split(r'\s*[xX×]\s*', str(_res))
+                                    if len(_parts) == 2:
+                                        _w, _h = int(_parts[0].strip()), int(_parts[1].strip())
+                                        if _w > 0 and _h > 0:
+                                            _min_w = _threshold_config.get('min_resolution_width', 0)
+                                            _min_h = _threshold_config.get('min_resolution_height', 0)
+                                            _max_h = _threshold_config.get('max_resolution_height', 0)
+                                            if _min_w > 0 and _w < _min_w:
+                                                _below = True
+                                            elif _min_h > 0 and _h < _min_h:
+                                                _below = True
+                                            elif _max_h > 0 and _h > _max_h:
+                                                _below = True
+                                except (ValueError, IndexError):
+                                    pass
+
+                            if not _below and isinstance(_brate, (int, float)) and _brate > 0:
+                                _min_brate = _threshold_config.get('min_bitrate_kbps', 0)
+                                if _min_brate > 0 and _brate < _min_brate:
+                                    _below = True
+
+                            if not _below and isinstance(_fps, (int, float)) and _fps > 0:
+                                _min_fps = _threshold_config.get('min_fps', 0)
+                                if _min_fps > 0 and _fps < _min_fps:
+                                    _below = True
+
+                            if _below:
+                                logger.info(
+                                    f"[rescore] Stream {stream['id']} below threshold: "
+                                    f"{stream.get('name', 'Unknown')} "
+                                    f"res={_res} bitrate={_brate} fps={_fps}"
+                                )
+
+                        if _below:
+                            dead_stream_ids.add(stream['id'])
                             continue
                     
                     # Calculate score using stored stats and CURRENT profile weights

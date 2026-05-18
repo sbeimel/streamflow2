@@ -1240,7 +1240,14 @@ class StreamCheckerService:
             
             # Identify which streams need analysis (new or unchecked)
             
-            if target_stream_ids is not None:
+            if rescore_mode:
+                # Rescore & Resort mode: NO FFmpeg analysis — only re-score and re-sort
+                # using cached stats. All streams are treated as already-checked.
+                streams_to_check = []
+                streams_already_checked = streams
+                logger.info(f"Rescore & Resort mode: skipping FFmpeg, re-scoring {len(streams)} streams from cached stats")
+
+            elif target_stream_ids is not None:
                 # Targeted check mode: Evaluates newly assigned streams ONLY
                 streams_to_check = [s for s in streams if str(s['id']) in [str(ts) for ts in target_stream_ids]]
                 streams_already_checked = [s for s in streams if str(s['id']) not in [str(ts) for ts in target_stream_ids]]
@@ -2273,7 +2280,14 @@ class StreamCheckerService:
             
             # Identify which streams need analysis (new or unchecked)
             
-            if target_stream_ids is not None:
+            if rescore_mode:
+                # Rescore & Resort mode: NO FFmpeg analysis — only re-score and re-sort
+                # using cached stats. All streams are treated as already-checked.
+                streams_to_check = []
+                streams_already_checked = streams
+                logger.info(f"Rescore & Resort mode: skipping FFmpeg, re-scoring {len(streams)} streams from cached stats")
+
+            elif target_stream_ids is not None:
                 # Targeted check mode: Evaluates newly assigned streams ONLY
                 streams_to_check = [s for s in streams if str(s['id']) in [str(ts) for ts in target_stream_ids]]
                 streams_already_checked = [s for s in streams if str(s['id']) not in [str(ts) for ts in target_stream_ids]]

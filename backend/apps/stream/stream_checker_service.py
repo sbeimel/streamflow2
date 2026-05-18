@@ -1740,12 +1740,9 @@ class StreamCheckerService:
                             _res   = cached_analyzed.get('resolution', 'N/A')
                             _brate = cached_analyzed.get('bitrate_kbps')
                             _fps   = cached_analyzed.get('fps')
-                            # A stream "has stats" if it has at least a valid resolution
-                            # OR a valid bitrate. Bitrate alone is not enough (could be 0
-                            # from a failed probe). Resolution is the primary indicator.
                             _has_stats = (
                                 _res not in ('N/A', '', None, '0x0') and
-                                'x' in str(_res)
+                                isinstance(_brate, (int, float)) and _brate > 0
                             )
                             _below = False
 
@@ -2667,12 +2664,9 @@ class StreamCheckerService:
                         _res   = analyzed.get('resolution', 'N/A')
                         _brate = analyzed.get('bitrate_kbps')
                         _fps   = analyzed.get('fps')
-                        # A stream "has stats" if it has at least a valid resolution.
-                        # Resolution is the primary indicator — bitrate alone can be 0
-                        # from a failed probe and is not sufficient.
                         _has_stats = (
                             _res not in ('N/A', '', None, '0x0') and
-                            'x' in str(_res)
+                            isinstance(_brate, (int, float)) and _brate > 0
                         )
                         _below = False
 

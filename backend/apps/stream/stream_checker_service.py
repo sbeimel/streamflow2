@@ -1240,7 +1240,20 @@ class StreamCheckerService:
             
             # Identify which streams need analysis (new or unchecked)
             
-            if target_stream_ids is not None:
+            if rescore_mode:
+                # Rescore & Resort mode: skip all FFmpeg analysis entirely.
+                # Use cached stream stats for every stream and re-apply current
+                # profile scoring weights + M3U priority order, then re-sort.
+                # Grace period, immunity period and force_check flags are all
+                # irrelevant here — we never want to trigger a live stream check.
+                streams_to_check = []
+                streams_already_checked = streams
+                logger.info(
+                    f"[rescore] Channel {channel_name}: skipping FFmpeg analysis, "
+                    f"re-scoring {len(streams)} cached streams with current profile settings"
+                )
+
+            elif target_stream_ids is not None:
                 # Targeted check mode: Evaluates newly assigned streams ONLY
                 streams_to_check = [s for s in streams if str(s['id']) in [str(ts) for ts in target_stream_ids]]
                 streams_already_checked = [s for s in streams if str(s['id']) not in [str(ts) for ts in target_stream_ids]]
@@ -2273,7 +2286,20 @@ class StreamCheckerService:
             
             # Identify which streams need analysis (new or unchecked)
             
-            if target_stream_ids is not None:
+            if rescore_mode:
+                # Rescore & Resort mode: skip all FFmpeg analysis entirely.
+                # Use cached stream stats for every stream and re-apply current
+                # profile scoring weights + M3U priority order, then re-sort.
+                # Grace period, immunity period and force_check flags are all
+                # irrelevant here — we never want to trigger a live stream check.
+                streams_to_check = []
+                streams_already_checked = streams
+                logger.info(
+                    f"[rescore] Channel {channel_name}: skipping FFmpeg analysis, "
+                    f"re-scoring {len(streams)} cached streams with current profile settings"
+                )
+
+            elif target_stream_ids is not None:
                 # Targeted check mode: Evaluates newly assigned streams ONLY
                 streams_to_check = [s for s in streams if str(s['id']) in [str(ts) for ts in target_stream_ids]]
                 streams_already_checked = [s for s in streams if str(s['id']) not in [str(ts) for ts in target_stream_ids]]

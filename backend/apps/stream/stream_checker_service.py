@@ -632,11 +632,7 @@ class StreamCheckerService:
             if udi is None:
                 udi = get_udi_manager()
             
-            stream_data = udi.get_stream_by_id(stream_id)
-            if not stream_data:
-                return None
-            
-            m3u_account_id = stream_data.get('m3u_account')
+            m3u_account_id = self._get_stream_m3u_account_id(stream_id, udi)
             if not m3u_account_id:
                 return None
             
@@ -647,6 +643,35 @@ class StreamCheckerService:
             return m3u_account.get('name', 'Unknown')
         except Exception as e:
             logger.debug(f"Could not fetch M3U account for stream {stream_id}: {e}")
+            return None
+
+    def _normalize_m3u_priority_ids(self, priority_ids: List[Any]) -> List[int]:
+        """Normalize profile M3U priority IDs to integers while preserving order."""
+        normalized = []
+        seen = set()
+        for raw_id in priority_ids or []:
+            if isinstance(raw_id, dict):
+                raw_id = raw_id.get('id') or raw_id.get('account_id')
+            try:
+                account_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if account_id not in seen:
+                normalized.append(account_id)
+                seen.add(account_id)
+        return normalized
+
+    def _get_stream_m3u_account_id(self, stream_id: int, udi=None) -> Optional[int]:
+        """Return the M3U account ID for a stream across API and SQL field names."""
+        try:
+            if udi is None:
+                udi = get_udi_manager()
+            stream_data = udi.get_stream_by_id(stream_id)
+            if not stream_data:
+                return None
+            account_id = stream_data.get('m3u_account') or stream_data.get('m3u_account_id')
+            return int(account_id) if account_id is not None else None
+        except Exception:
             return None
     
     
@@ -1111,12 +1136,23 @@ class StreamCheckerService:
             if not forced_profile_id or not profile:
                 config = automation_config.get_effective_configuration(channel_id, group_id)
                 profile = config.get('profile') if config else None
+                if not profile:
+                    profile = automation_config.get_effective_profile(channel_id, group_id)
             if profile:
                 profile_stream_checking = profile.get('stream_checking', {})
                 stream_limit = profile_stream_checking.get('stream_limit', 0)
                 allow_revive = profile_stream_checking.get('allow_revive', True)
-                priority_m3u_ids = profile_stream_checking.get('m3u_priority', [])
-                priority_mode = profile_stream_checking.get('m3u_priority_mode', 'absolute')
+                priority_m3u_ids = self._normalize_m3u_priority_ids(
+                    profile_stream_checking.get('m3u_priority', profile.get('m3u_priority', []))
+                )
+                priority_mode = profile_stream_checking.get(
+                    'm3u_priority_mode',
+                    profile.get('m3u_priority_mode', 'absolute')
+                )
+                logger.info(
+                    f"Using profile '{profile.get('name', profile.get('id'))}' for channel {channel_id}: "
+                    f"priority_mode={priority_mode}, m3u_priority={priority_m3u_ids[:8]}"
+                )
                 grace_period = profile_stream_checking.get('grace_period', False)
                 loop_check_enabled = profile_stream_checking.get('loop_check_enabled', False)
                 profile_remove_dead_streams = profile_stream_checking.get('remove_dead_streams')
@@ -1918,7 +1954,11 @@ class StreamCheckerService:
 
             # Apply provider diversification if enabled
             if self.config.get('stream_ordering', {}).get('provider_diversification', False):
-                analyzed_streams = self._apply_provider_diversification(analyzed_streams, channel_id)
+                analyzed_streams = self._apply_provider_diversification(
+                    analyzed_streams,
+                    channel_id,
+                    priority_m3u_ids=priority_m3u_ids
+                )
 
             # Apply account stream limits if enabled
             if self.config.get('account_stream_limits', {}).get('enabled', False):
@@ -2260,12 +2300,23 @@ class StreamCheckerService:
             if not forced_profile_id or not profile:
                 config = automation_config.get_effective_configuration(channel_id, group_id)
                 profile = config.get('profile') if config else None
+                if not profile:
+                    profile = automation_config.get_effective_profile(channel_id, group_id)
             if profile:
                 profile_stream_checking = profile.get('stream_checking', {})
                 stream_limit = profile_stream_checking.get('stream_limit', 0)
                 allow_revive = profile_stream_checking.get('allow_revive', True)
-                priority_m3u_ids = profile_stream_checking.get('m3u_priority', [])
-                priority_mode = profile_stream_checking.get('m3u_priority_mode', 'absolute')
+                priority_m3u_ids = self._normalize_m3u_priority_ids(
+                    profile_stream_checking.get('m3u_priority', profile.get('m3u_priority', []))
+                )
+                priority_mode = profile_stream_checking.get(
+                    'm3u_priority_mode',
+                    profile.get('m3u_priority_mode', 'absolute')
+                )
+                logger.info(
+                    f"Using profile '{profile.get('name', profile.get('id'))}' for channel {channel_id}: "
+                    f"priority_mode={priority_mode}, m3u_priority={priority_m3u_ids[:8]}"
+                )
                 grace_period = profile_stream_checking.get('grace_period', False)
                 loop_check_enabled = profile_stream_checking.get('loop_check_enabled', False)
                 profile_remove_dead_streams = profile_stream_checking.get('remove_dead_streams')
@@ -2906,7 +2957,11 @@ class StreamCheckerService:
 
             # Apply provider diversification if enabled
             if self.config.get('stream_ordering', {}).get('provider_diversification', False):
-                analyzed_streams = self._apply_provider_diversification(analyzed_streams, channel_id)
+                analyzed_streams = self._apply_provider_diversification(
+                    analyzed_streams,
+                    channel_id,
+                    priority_m3u_ids=priority_m3u_ids
+                )
 
             # Apply account stream limits if enabled
             if self.config.get('account_stream_limits', {}).get('enabled', False):
@@ -3585,8 +3640,7 @@ class StreamCheckerService:
                     result.append(stream)
                     continue
 
-                raw = udi.get_stream_by_id(stream_id)
-                acct_id = raw.get('m3u_account') if raw else None
+                acct_id = self._get_stream_m3u_account_id(stream_id, udi)
 
                 if not acct_id:
                     # Custom stream — always keep
@@ -3624,7 +3678,12 @@ class StreamCheckerService:
             logger.warning(f"Channel {channel_id}: account stream limits failed, using original list: {e}")
             return analyzed_streams
 
-    def _apply_provider_diversification(self, analyzed_streams: List[Dict], channel_id: int) -> List[Dict]:
+    def _apply_provider_diversification(
+        self,
+        analyzed_streams: List[Dict],
+        channel_id: int,
+        priority_m3u_ids: List[int] = None
+    ) -> List[Dict]:
         """Apply provider diversification to stream ordering for better redundancy.
 
         Interleaves streams from different M3U providers so that a single provider
@@ -3648,6 +3707,10 @@ class StreamCheckerService:
 
         try:
             udi = get_udi_manager()
+            priority_rank = {
+                account_id: idx
+                for idx, account_id in enumerate(self._normalize_m3u_priority_ids(priority_m3u_ids or []))
+            }
 
             # Group streams by provider (M3U account name)
             provider_groups: Dict[str, List[Dict]] = {}
@@ -3659,12 +3722,13 @@ class StreamCheckerService:
                 if stream_id:
                     raw = udi.get_stream_by_id(stream_id)
                     if raw:
-                        m3u_id = raw.get('m3u_account')
+                        m3u_id = self._get_stream_m3u_account_id(stream_id, udi)
                         if m3u_id:
                             acct = udi.get_m3u_account_by_id(m3u_id)
                             if acct:
                                 provider_name = acct.get('name', f'account_{m3u_id}')
-                                # Store priority for priority_weighted mode
+                                # Store profile rank/global priority for priority_weighted mode
+                                stream['_provider_rank'] = priority_rank.get(m3u_id, len(priority_rank) + 1000)
                                 stream['_provider_priority'] = acct.get('priority', 50)
                                 stream['_provider_name'] = provider_name
 
@@ -3679,11 +3743,18 @@ class StreamCheckerService:
 
             # Sort providers
             if mode == 'priority_weighted':
-                # Sort by highest priority value in each group (descending)
-                def group_priority(name: str) -> float:
-                    streams_in_group = provider_groups[name]
-                    return max((s.get('_provider_priority', 50) for s in streams_in_group), default=50)
-                sorted_providers = sorted(provider_groups.keys(), key=group_priority, reverse=True)
+                if priority_rank:
+                    # Sort by profile Playlist Priority Rank first.
+                    def group_profile_rank(name: str) -> int:
+                        streams_in_group = provider_groups[name]
+                        return min((s.get('_provider_rank', len(priority_rank) + 1000) for s in streams_in_group), default=len(priority_rank) + 1000)
+                    sorted_providers = sorted(provider_groups.keys(), key=group_profile_rank)
+                else:
+                    # Legacy fallback: sort by highest global account priority value.
+                    def group_priority(name: str) -> float:
+                        streams_in_group = provider_groups[name]
+                        return max((s.get('_provider_priority', 50) for s in streams_in_group), default=50)
+                    sorted_providers = sorted(provider_groups.keys(), key=group_priority, reverse=True)
             else:
                 # Round robin: alphabetical
                 sorted_providers = sorted(provider_groups.keys())
@@ -3702,6 +3773,7 @@ class StreamCheckerService:
 
             # Clean up temporary keys added during grouping
             for s in result:
+                s.pop('_provider_rank', None)
                 s.pop('_provider_priority', None)
                 s.pop('_provider_name', None)
 
@@ -3730,11 +3802,7 @@ class StreamCheckerService:
                 
             # Get stream from UDI to find its M3U account
             udi = get_udi_manager()
-            stream = udi.get_stream_by_id(stream_id)
-            if not stream:
-                return 0.0
-            
-            m3u_account_id = stream.get('m3u_account')
+            m3u_account_id = self._get_stream_m3u_account_id(stream_id, udi)
             if not m3u_account_id:
                 return 0.0
             
@@ -3806,9 +3874,8 @@ class StreamCheckerService:
         stream_id = stream_data.get('stream_id')
         if priority_m3u_ids and stream_id:
             udi = get_udi_manager()
-            stream = udi.get_stream_by_id(stream_id)
-            if stream:
-                m3u_id = stream.get('m3u_account')
+            m3u_id = self._get_stream_m3u_account_id(stream_id, udi)
+            if m3u_id:
                 if m3u_id in priority_m3u_ids:
                     account_rank = priority_m3u_ids.index(m3u_id)
         

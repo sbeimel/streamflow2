@@ -218,7 +218,7 @@ class StreamCheckerService:
         self._pending_target_stream_ids: Dict[int, List[int]] = {}
         
         # Rescore mode channels - channels queued via rescore_and_resort
-        # that should check cached streams against profile thresholds
+        # that should only re-score and re-sort cached streams
         self._rescore_mode_channels: set = set()
 
         logger.info("Stream Checker Service initialized")
@@ -297,7 +297,7 @@ class StreamCheckerService:
                 rescore_mode = channel_id in self._rescore_mode_channels
                 if rescore_mode:
                     self._rescore_mode_channels.discard(channel_id)
-                    logger.debug(f"Worker: rescore mode enabled for channel {channel_id} (cached streams will be checked against thresholds)")
+                    logger.debug(f"Worker: rescore mode enabled for channel {channel_id} (cached streams will only be re-scored/re-sorted)")
                 
                 # Check this channel — use targeted stream list if set by test_streams_without_stats
                 _target = self._pending_target_stream_ids.pop(channel_id, None)
@@ -1051,9 +1051,8 @@ class StreamCheckerService:
             target_stream_ids: Optional list of stream IDs. If provided, ONLY these
                                streams will be checked, bypassing all other logic.
             forced_profile_id: Optional profile ID to use instead of active period profile
-            rescore_mode: If True, cached streams will be checked against profile thresholds
-                         (min_resolution, max_resolution, min_bitrate, min_fps) and marked
-                         as dead if they don't meet requirements. Used by rescore_and_resort.
+            rescore_mode: If True, cached streams are re-scored and re-sorted without
+                         FFmpeg checks or stream removal. Used by rescore_and_resort.
         """
         import time as time_module
         from apps.stream.stream_check_utils import analyze_stream
@@ -1736,24 +1735,8 @@ class StreamCheckerService:
                             'score': 0.0 # Will be calculated below
                         }
                         
-                        # RESCORE MODE: Check cached streams against profile thresholds
-                        # When rescore_mode=True (from rescore_and_resort), cached streams
-                        # are checked against min_resolution, max_resolution, min_bitrate,
-                        # min_fps and marked as dead if they don't meet requirements.
-                        if rescore_mode:
-                            is_dead, dead_reason = self._is_stream_dead(
-                                cached_analyzed, 
-                                channel_id, 
-                                threshold_config=_threshold_config
-                            )
-                            if is_dead:
-                                dead_stream_ids.add(stream_id)
-                                logger.info(
-                                    f"[rescore] Cached stream {stream_id} marked as dead: "
-                                    f"{stream.get('name', 'Unknown')} (reason={dead_reason})"
-                                )
-                                # Skip adding to analyzed_streams - will be filtered out
-                                continue
+                        # Rescore is score/order only. Cached threshold data is
+                        # not authoritative enough to remove channel streams.
                         
                         # Calculate score using CURRENT profile weights
                         score = self._calculate_stream_score(cached_analyzed, priority_m3u_ids, priority_mode, scoring_weights)
@@ -1765,6 +1748,80 @@ class StreamCheckerService:
                     logger.info(f"Merged {len(cached_analyzed_streams)} cached streams with {len(results)} new results. Total candidates: {len(analyzed_streams)}")
 
                 logger.info(f"Completed smart parallel analysis of {len(results)} streams with account-aware limits")
+
+            if rescore_mode and streams_already_checked:
+                cached_analyzed_streams = []
+                logger.info(f"[rescore] Re-integrating {len(streams_already_checked)} cached streams for sorting")
+
+                for stream in streams_already_checked:
+                    stream_id = stream['id']
+
+                    if exclusions_enabled and excluded_account_ids:
+                        raw_s = udi.get_stream_by_id(stream_id)
+                        acct_id_s = raw_s.get('m3u_account') if raw_s else None
+                        if acct_id_s and acct_id_s in excluded_account_ids:
+                            priority_score_s = 50.0
+                            if raw_s:
+                                acct_s = udi.get_m3u_account_by_id(acct_id_s)
+                                if acct_s:
+                                    priority_score_s = float(acct_s.get('priority', 50))
+                            normalized_s = min(priority_score_s / 100.0, 1.0)
+                            cached_analyzed_streams.append({
+                                'stream_id': stream_id,
+                                'stream_url': stream.get('url'),
+                                'stream_name': stream.get('name'),
+                                'bitrate_kbps': 0,
+                                'resolution': 'N/A',
+                                'fps': 0,
+                                'video_codec': 'N/A',
+                                'audio_codec': 'N/A',
+                                'hdr_format': None,
+                                'status': 'Priority-Only',
+                                'channel_id': channel_id,
+                                'channel_name': channel_name,
+                                'score': normalized_s,
+                                '_priority_only': True,
+                                'm3u_account': self._get_m3u_account_name(stream_id, udi),
+                            })
+                            continue
+
+                    stream_stats = stream.get('stream_stats')
+                    if stream_stats is None:
+                        stream_stats = {}
+                    elif isinstance(stream_stats, str):
+                        try:
+                            stream_stats = json.loads(stream_stats)
+                        except json.JSONDecodeError:
+                            stream_stats = {}
+
+                    cached_analyzed = {
+                        'stream_id': stream_id,
+                        'stream_url': stream.get('url'),
+                        'stream_name': stream.get('name'),
+                        'bitrate_kbps': stream_stats.get('ffmpeg_output_bitrate', 0),
+                        'resolution': stream_stats.get('resolution', 'N/A'),
+                        'fps': stream_stats.get('source_fps', 0),
+                        'video_codec': stream_stats.get('video_codec', 'N/A'),
+                        'audio_codec': stream_stats.get('audio_codec', 'N/A'),
+                        'hdr_format': stream_stats.get('hdr_format'),
+                        'status': 'cached',
+                        'channel_id': channel_id,
+                        'channel_name': channel_name,
+                        'score': 0.0
+                    }
+                    cached_analyzed['score'] = self._calculate_stream_score(
+                        cached_analyzed,
+                        priority_m3u_ids,
+                        priority_mode,
+                        scoring_weights
+                    )
+                    cached_analyzed_streams.append(cached_analyzed)
+
+                analyzed_streams.extend(cached_analyzed_streams)
+                logger.info(
+                    f"[rescore] Re-scored {len(cached_analyzed_streams)} cached streams. "
+                    f"Total candidates: {len(analyzed_streams)}"
+                )
 
             # --- Process priority-only streams (quality check exclusions) ---
             # These streams skip FFmpeg analysis. Score = M3U account priority value.
@@ -1873,7 +1930,7 @@ class StreamCheckerService:
             # Remove dead streams from the channel (if enabled in config)
             # Dead streams are checked during all channel checks (normal and global)
             # If they're still dead, they're removed; if revived, they remain
-            if dead_stream_ids:
+            if dead_stream_ids and not rescore_mode:
                 if dead_stream_removal_enabled:
                     logger.warning(f"ðŸ”´ Removing {len(dead_stream_ids)} dead streams from channel {channel_name}")
                     analyzed_streams = [s for s in analyzed_streams if s.get('stream_id') not in dead_stream_ids]
@@ -1899,8 +1956,15 @@ class StreamCheckerService:
             # Skip update if check was aborted — partial results must not overwrite the channel
             if self.abort_current_check.is_set():
                 logger.warning(f"Check was aborted for channel {channel_name} — skipping channel update to preserve existing stream order")
+            elif rescore_mode and current_stream_ids and not reordered_ids:
+                logger.error(f"[rescore] Refusing to update channel {channel_name}: no reordered streams were produced")
             else:
-                update_channel_streams(channel_id, reordered_ids, allow_dead_streams=(not dead_stream_removal_enabled))
+                update_channel_streams(
+                    channel_id,
+                    reordered_ids,
+                    valid_stream_ids=set(reordered_ids) if rescore_mode else None,
+                    allow_dead_streams=(rescore_mode or not dead_stream_removal_enabled)
+                )
             
             # Verify the update
             self.progress.update(
@@ -2107,9 +2171,8 @@ class StreamCheckerService:
             target_stream_ids: Optional list of stream IDs. If provided, ONLY these
                                streams will be checked, bypassing all other logic.
             forced_profile_id: Optional profile ID to use instead of active period profile
-            rescore_mode: If True, cached streams will be checked against profile thresholds
-                         (min_resolution, max_resolution, min_bitrate, min_fps) and marked
-                         as dead if they don't meet requirements. Used by rescore_and_resort.
+            rescore_mode: If True, cached streams are re-scored and re-sorted without
+                         FFmpeg checks or stream removal. Used by rescore_and_resort.
         """
         import time as time_module
         start_time = time_module.time()
@@ -2579,7 +2642,7 @@ class StreamCheckerService:
                         'audio_codec': stream_stats.get('audio_codec', 'N/A'),
                         'hdr_format': stream_stats.get('hdr_format'),
                         'bitrate_kbps': stream_stats.get('ffmpeg_output_bitrate', 0),
-                        'status': 'OK'  # Assume OK for previously checked streams
+                        'status': 'cached' if rescore_mode else 'OK'
                     }
                     
                     # TARGETED MODE GUARD: Dead-state transitions for streams in
@@ -2623,24 +2686,8 @@ class StreamCheckerService:
                     #     logger.debug(f"Cached stream {stream['id']} remains dead (already marked)")
                     #     dead_stream_ids.add(stream['id'])
                     
-                    # RESCORE MODE: Check cached streams against profile thresholds
-                    # When rescore_mode=True (from rescore_and_resort), cached streams
-                    # are checked against min_resolution, max_resolution, min_bitrate,
-                    # min_fps and marked as dead if they don't meet requirements.
-                    if rescore_mode:
-                        is_dead, dead_reason = self._is_stream_dead(
-                            analyzed, 
-                            channel_id, 
-                            threshold_config=_threshold_config
-                        )
-                        if is_dead:
-                            dead_stream_ids.add(stream['id'])
-                            logger.info(
-                                f"[rescore] Cached stream {stream['id']} marked as dead: "
-                                f"{stream.get('name', 'Unknown')} (reason={dead_reason})"
-                            )
-                            # Skip adding to analyzed_streams - will be filtered out
-                            continue
+                    # Rescore is score/order only. Cached threshold data is
+                    # not authoritative enough to remove channel streams.
                     
                     # Calculate score using stored stats and CURRENT profile weights
                     score = self._calculate_stream_score(analyzed, priority_m3u_ids, priority_mode, scoring_weights)
@@ -2648,6 +2695,35 @@ class StreamCheckerService:
                     analyzed_streams.append(analyzed)
                     logger.debug(f"Using cached data for stream {stream['id']}: {stream.get('name')} - Score: {score:.2f}")
                 else:
+                    if rescore_mode:
+                        logger.warning(
+                            f"[rescore] Could not fetch cached data for stream {stream['id']}; "
+                            "keeping stream with empty cached stats"
+                        )
+                        analyzed = {
+                            'channel_id': channel_id,
+                            'channel_name': channel_name,
+                            'stream_id': stream['id'],
+                            'stream_name': stream.get('name', 'Unknown'),
+                            'stream_url': stream.get('url', ''),
+                            'resolution': 'N/A',
+                            'fps': 0,
+                            'video_codec': 'N/A',
+                            'audio_codec': 'N/A',
+                            'hdr_format': None,
+                            'bitrate_kbps': 0,
+                            'status': 'cached'
+                        }
+                        score = self._calculate_stream_score(
+                            analyzed,
+                            priority_m3u_ids,
+                            priority_mode,
+                            scoring_weights
+                        )
+                        analyzed['score'] = score
+                        analyzed_streams.append(analyzed)
+                        continue
+
                     # If we can't fetch cached data, analyze this stream
                     logger.warning(f"Could not fetch cached data for stream {stream['id']}, will analyze")
                     analysis_params = self.config.get('stream_analysis', {})
@@ -2806,7 +2882,7 @@ class StreamCheckerService:
             # Remove dead streams from the channel (if enabled in config)
             # Dead streams are checked during all channel checks (normal and global)
             # If they're still dead, they're removed; if revived, they remain
-            if dead_stream_ids:
+            if dead_stream_ids and not rescore_mode:
                 if dead_stream_removal_enabled:
                     logger.warning(f"ðŸ”´ Removing {len(dead_stream_ids)} dead streams from channel {channel_name}")
                     # Log which streams are being removed
@@ -2837,8 +2913,15 @@ class StreamCheckerService:
             # Skip update if check was aborted — partial results must not overwrite the channel
             if self.abort_current_check.is_set():
                 logger.warning(f"Check was aborted for channel {channel_name} — skipping channel update to preserve existing stream order")
+            elif rescore_mode and current_stream_ids and not reordered_ids:
+                logger.error(f"[rescore] Refusing to update channel {channel_name}: no reordered streams were produced")
             else:
-                update_channel_streams(channel_id, reordered_ids, allow_dead_streams=(not dead_stream_removal_enabled))
+                update_channel_streams(
+                    channel_id,
+                    reordered_ids,
+                    valid_stream_ids=set(reordered_ids) if rescore_mode else None,
+                    allow_dead_streams=(rescore_mode or not dead_stream_removal_enabled)
+                )
             
             # Verify the update was applied correctly
             self.progress.update(
@@ -4615,8 +4698,8 @@ class StreamCheckerService:
         Queues all channels for checking. The worker will use cached stream stats
         and re-apply current scoring weights and preferences, then re-sort.
         
-        Cached streams will be checked against current profile thresholds (min_resolution,
-        max_resolution, min_bitrate, min_fps) and removed if they don't meet requirements.
+        No FFmpeg validation or dead-stream cleanup is applied in this mode.
+        Current stream limits and account limits are still applied.
         
         Returns:
             Dict with queued channel count
@@ -4633,11 +4716,11 @@ class StreamCheckerService:
             for cid in channel_ids:
                 self.check_queue.remove_from_completed(cid)
             
-            # Mark channels for rescore mode so cached streams are checked against thresholds
+            # Mark channels for rescore mode so cached streams are only re-scored/re-sorted
             self._rescore_mode_channels = set(channel_ids)
             
             added = self.check_queue.add_channels(channel_ids, priority=8)
-            logger.info(f"Rescore & Resort: queued {added}/{len(channel_ids)} channels (cached streams will be checked against profile thresholds)")
+            logger.info(f"Rescore & Resort: queued {added}/{len(channel_ids)} channels (cached streams will only be re-scored/re-sorted)")
             return {'success': True, 'queued': added, 'total': len(channel_ids)}
         except Exception as e:
             logger.error(f"Rescore & Resort failed: {e}")

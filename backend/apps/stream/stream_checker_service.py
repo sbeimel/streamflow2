@@ -1954,7 +1954,12 @@ class StreamCheckerService:
                 step_detail='Applying new stream order to channel'
             )
             reordered_ids = [s.get('stream_id') for s in analyzed_streams if s.get('stream_id') is not None]
-            reordered_ids = [int(sid) if isinstance(sid, str) and sid.isdigit() else sid for sid in reordered_ids]
+            if rescore_mode:
+                logger.info(
+                    f"[rescore] Channel {channel_name} order preview: "
+                    f"old={current_stream_ids[:8]} new={reordered_ids[:8]} "
+                    f"changed={current_stream_ids != reordered_ids}"
+                )
             # Dead streams have already been filtered from analyzed_streams if removal is enabled
             # If removal is disabled, allow them to remain in the channel
             # Skip update if check was aborted — partial results must not overwrite the channel
@@ -1976,6 +1981,27 @@ class StreamCheckerService:
                         f"[rescore] Updated channel {channel_name} stream order "
                         f"({len(reordered_ids)} stream(s))"
                     )
+                    time_module.sleep(0.5)
+                    udi.refresh_channel_by_id(channel_id)
+                    updated_channel_data = udi.get_channel_by_id(channel_id) or {}
+                    updated_stream_ids = updated_channel_data.get('streams', [])
+                    try:
+                        direct_streams = udi.fetcher.fetch_channel_streams(channel_id)
+                        direct_stream_ids = [
+                            s.get('id') for s in direct_streams
+                            if isinstance(s, dict) and s.get('id') is not None
+                        ]
+                        if direct_stream_ids:
+                            updated_stream_ids = direct_stream_ids
+                    except Exception as e:
+                        logger.debug(f"[rescore] Direct order verification failed for {channel_name}: {e}")
+                    if updated_stream_ids != reordered_ids:
+                        logger.warning(
+                            f"[rescore] Dispatcharr order mismatch for {channel_name}: "
+                            f"expected={reordered_ids[:8]} actual={updated_stream_ids[:8]}"
+                        )
+                    else:
+                        logger.info(f"[rescore] Verified Dispatcharr order for {channel_name}")
             
             # Verify the update
             self.progress.update(
@@ -2921,7 +2947,12 @@ class StreamCheckerService:
                 step_detail='Applying new stream order to channel'
             )
             reordered_ids = [s.get('stream_id') for s in analyzed_streams if s.get('stream_id') is not None]
-            reordered_ids = [int(sid) if isinstance(sid, str) and sid.isdigit() else sid for sid in reordered_ids]
+            if rescore_mode:
+                logger.info(
+                    f"[rescore] Channel {channel_name} order preview: "
+                    f"old={current_stream_ids[:8]} new={reordered_ids[:8]} "
+                    f"changed={current_stream_ids != reordered_ids}"
+                )
             # Dead streams have already been filtered from analyzed_streams if removal is enabled
             # If removal is disabled, allow them to remain in the channel
             # Skip update if check was aborted — partial results must not overwrite the channel
@@ -2943,6 +2974,27 @@ class StreamCheckerService:
                         f"[rescore] Updated channel {channel_name} stream order "
                         f"({len(reordered_ids)} stream(s))"
                     )
+                    time_module.sleep(0.5)
+                    udi.refresh_channel_by_id(channel_id)
+                    updated_channel_data = udi.get_channel_by_id(channel_id) or {}
+                    updated_stream_ids = updated_channel_data.get('streams', [])
+                    try:
+                        direct_streams = udi.fetcher.fetch_channel_streams(channel_id)
+                        direct_stream_ids = [
+                            s.get('id') for s in direct_streams
+                            if isinstance(s, dict) and s.get('id') is not None
+                        ]
+                        if direct_stream_ids:
+                            updated_stream_ids = direct_stream_ids
+                    except Exception as e:
+                        logger.debug(f"[rescore] Direct order verification failed for {channel_name}: {e}")
+                    if updated_stream_ids != reordered_ids:
+                        logger.warning(
+                            f"[rescore] Dispatcharr order mismatch for {channel_name}: "
+                            f"expected={reordered_ids[:8]} actual={updated_stream_ids[:8]}"
+                        )
+                    else:
+                        logger.info(f"[rescore] Verified Dispatcharr order for {channel_name}")
             
             # Verify the update was applied correctly
             self.progress.update(

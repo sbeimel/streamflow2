@@ -1319,7 +1319,8 @@ class StreamCheckerService:
                                 'video_codec': extracted_stats.get('video_codec'),
                                 'audio_codec': extracted_stats.get('audio_codec'),
                                 'hdr_format': extracted_stats.get('hdr_format'),
-                                'status': 'cached'
+                                'status': 'OK',
+                                '_cached': True,
                             }
                             
                             temp_score = self._calculate_stream_score(cached_for_score, priority_m3u_ids, priority_mode, scoring_weights)
@@ -1729,7 +1730,8 @@ class StreamCheckerService:
                             'video_codec': stream_stats.get('video_codec', 'N/A'),
                             'audio_codec': stream_stats.get('audio_codec', 'N/A'),
                             'hdr_format': stream_stats.get('hdr_format'),
-                            'status': 'cached',
+                            'status': 'OK',
+                            '_cached': True,
                             'channel_id': channel_id,
                             'channel_name': channel_name,
                             'score': 0.0 # Will be calculated below
@@ -1804,7 +1806,8 @@ class StreamCheckerService:
                         'video_codec': stream_stats.get('video_codec', 'N/A'),
                         'audio_codec': stream_stats.get('audio_codec', 'N/A'),
                         'hdr_format': stream_stats.get('hdr_format'),
-                        'status': 'cached',
+                        'status': 'OK',
+                        '_cached': True,
                         'channel_id': channel_id,
                         'channel_name': channel_name,
                         'score': 0.0
@@ -1866,7 +1869,7 @@ class StreamCheckerService:
             # Called after all streams are scored and analyzed_streams is fully
             # assembled so the complete score distribution is available.
             # Gated on the per-profile loop_check_enabled flag.
-            if loop_check_enabled:
+            if loop_check_enabled and not rescore_mode:
                 analysis_params_lp = self.config.get('stream_analysis', {})
                 self._run_loop_probes(
                     analyzed_streams,
@@ -1951,6 +1954,7 @@ class StreamCheckerService:
                 step_detail='Applying new stream order to channel'
             )
             reordered_ids = [s.get('stream_id') for s in analyzed_streams if s.get('stream_id') is not None]
+            reordered_ids = [int(sid) if isinstance(sid, str) and sid.isdigit() else sid for sid in reordered_ids]
             # Dead streams have already been filtered from analyzed_streams if removal is enabled
             # If removal is disabled, allow them to remain in the channel
             # Skip update if check was aborted — partial results must not overwrite the channel
@@ -1959,12 +1963,19 @@ class StreamCheckerService:
             elif rescore_mode and current_stream_ids and not reordered_ids:
                 logger.error(f"[rescore] Refusing to update channel {channel_name}: no reordered streams were produced")
             else:
-                update_channel_streams(
+                update_success = update_channel_streams(
                     channel_id,
                     reordered_ids,
                     valid_stream_ids=set(reordered_ids) if rescore_mode else None,
                     allow_dead_streams=(rescore_mode or not dead_stream_removal_enabled)
                 )
+                if not update_success:
+                    logger.error(f"Failed to update channel {channel_name} with reordered streams")
+                elif rescore_mode:
+                    logger.info(
+                        f"[rescore] Updated channel {channel_name} stream order "
+                        f"({len(reordered_ids)} stream(s))"
+                    )
             
             # Verify the update
             self.progress.update(
@@ -2642,7 +2653,8 @@ class StreamCheckerService:
                         'audio_codec': stream_stats.get('audio_codec', 'N/A'),
                         'hdr_format': stream_stats.get('hdr_format'),
                         'bitrate_kbps': stream_stats.get('ffmpeg_output_bitrate', 0),
-                        'status': 'cached' if rescore_mode else 'OK'
+                        'status': 'OK',
+                        '_cached': True,
                     }
                     
                     # TARGETED MODE GUARD: Dead-state transitions for streams in
@@ -2712,7 +2724,8 @@ class StreamCheckerService:
                             'audio_codec': 'N/A',
                             'hdr_format': None,
                             'bitrate_kbps': 0,
-                            'status': 'cached'
+                            'status': 'OK',
+                            '_cached': True,
                         }
                         score = self._calculate_stream_score(
                             analyzed,
@@ -2827,7 +2840,7 @@ class StreamCheckerService:
                     analyzed_streams.append(priority_analyzed)
                 logger.info(f"Added {len(priority_only_streams)} priority-only stream(s) to analyzed_streams (sequential)")
 
-            if loop_check_enabled:
+            if loop_check_enabled and not rescore_mode:
                 analysis_params_lp = self.config.get('stream_analysis', {})
                 self._run_loop_probes(
                     analyzed_streams,
@@ -2908,6 +2921,7 @@ class StreamCheckerService:
                 step_detail='Applying new stream order to channel'
             )
             reordered_ids = [s.get('stream_id') for s in analyzed_streams if s.get('stream_id') is not None]
+            reordered_ids = [int(sid) if isinstance(sid, str) and sid.isdigit() else sid for sid in reordered_ids]
             # Dead streams have already been filtered from analyzed_streams if removal is enabled
             # If removal is disabled, allow them to remain in the channel
             # Skip update if check was aborted — partial results must not overwrite the channel
@@ -2916,12 +2930,19 @@ class StreamCheckerService:
             elif rescore_mode and current_stream_ids and not reordered_ids:
                 logger.error(f"[rescore] Refusing to update channel {channel_name}: no reordered streams were produced")
             else:
-                update_channel_streams(
+                update_success = update_channel_streams(
                     channel_id,
                     reordered_ids,
                     valid_stream_ids=set(reordered_ids) if rescore_mode else None,
                     allow_dead_streams=(rescore_mode or not dead_stream_removal_enabled)
                 )
+                if not update_success:
+                    logger.error(f"Failed to update channel {channel_name} with reordered streams")
+                elif rescore_mode:
+                    logger.info(
+                        f"[rescore] Updated channel {channel_name} stream order "
+                        f"({len(reordered_ids)} stream(s))"
+                    )
             
             # Verify the update was applied correctly
             self.progress.update(
@@ -3182,6 +3203,7 @@ class StreamCheckerService:
             s for s in analyzed_streams
             if s.get('score', 0) >= LOOP_PROBE_SCORE_THRESHOLD
             and s.get('status') != 'cached'
+            and not s.get('_cached', False)
             and not s.get('_priority_only', False)
         ]
 

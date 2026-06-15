@@ -390,7 +390,7 @@ def patch_request(url: str, payload: Dict[str, Any], max_retries: int = 5) -> re
                 else:
                     raise
             elif e.response.status_code >= 500 and retries < max_retries:
-                wait = 2 * (retries + 1)  # Progressive backoff: 2s, 4s, 6s, 8s, 10s
+                wait = 5 * (retries + 1)  # Progressive backoff: 5s, 10s, 15s, 20s, 25s
                 logger.warning(f"Got HTTP {e.response.status_code} patching data to {url}. Retrying {retries+1}/{max_retries} (wait {wait}s)...")
                 _time.sleep(wait)
                 retries += 1

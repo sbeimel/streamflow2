@@ -1854,6 +1854,19 @@ class StreamCheckerService:
                         priority_mode,
                         scoring_weights
                     )
+                    # Rescore mode: check cached stats against profile minimum quality
+                    # requirements (min_resolution, max_resolution, min_fps, min_bitrate).
+                    # Streams that fail get score 0.0 so they sort to bottom and are
+                    # trimmed by stream_limit.  No FFmpeg is run.
+                    _rescore_is_dead, _rescore_reason = self._is_stream_dead(
+                        cached_analyzed, channel_id, threshold_config=_threshold_config
+                    )
+                    if _rescore_is_dead:
+                        logger.info(
+                            f"[rescore] Stream {stream_id} ({stream.get('name')}) "
+                            f"below quality threshold ({_rescore_reason}) — score set to 0.0"
+                        )
+                        cached_analyzed['score'] = 0.0
                     cached_analyzed_streams.append(cached_analyzed)
 
                 analyzed_streams.extend(cached_analyzed_streams)
@@ -2781,6 +2794,20 @@ class StreamCheckerService:
                     # Calculate score using stored stats and CURRENT profile weights
                     score = self._calculate_stream_score(analyzed, priority_m3u_ids, priority_mode, scoring_weights)
                     analyzed['score'] = score
+                    # Rescore mode: check cached stats against profile minimum quality
+                    # requirements (min_resolution, max_resolution, min_fps, min_bitrate).
+                    # Streams that fail get score 0.0 so they sort to bottom and are
+                    # trimmed by stream_limit.  No FFmpeg is run.
+                    if rescore_mode:
+                        _rescore_is_dead, _rescore_reason = self._is_stream_dead(
+                            analyzed, channel_id, threshold_config=_threshold_config
+                        )
+                        if _rescore_is_dead:
+                            logger.info(
+                                f"[rescore] Stream {stream['id']} ({stream.get('name')}) "
+                                f"below quality threshold ({_rescore_reason}) — score set to 0.0"
+                            )
+                            analyzed['score'] = 0.0
                     analyzed_streams.append(analyzed)
                     logger.debug(f"Using cached data for stream {stream['id']}: {stream.get('name')} - Score: {score:.2f}")
                 else:

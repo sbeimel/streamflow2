@@ -323,6 +323,22 @@ export default function Dashboard() {
     }
   }
 
+  const handleTestDeadStreams = async () => {
+    try {
+      setActionLoading('test-dead')
+      const res = await fetch('/api/stream-checker/test-dead-streams', { method: 'POST' })
+      const data = await res.json()
+      toast({
+        title: data.streams_found > 0 ? "Test Dead Streams Started" : "No Dead Streams Found",
+        description: data.message || `Found ${data.streams_found || 0} dead stream(s) to re-check.`
+      })
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to trigger test dead streams", variant: "destructive" })
+    } finally {
+      setActionLoading('')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -586,6 +602,18 @@ export default function Dashboard() {
                   ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   : <TestTube className="mr-2 h-4 w-4" />}
                 Test Missing Stats
+              </Button>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={shouldDisableActions}
+                onClick={handleTestDeadStreams}
+              >
+                {actionLoading === 'test-dead'
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <RefreshCw className="mr-2 h-4 w-4" />}
+                Test Dead Streams
               </Button>
             </div>
           </div>

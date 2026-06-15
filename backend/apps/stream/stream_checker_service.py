@@ -4976,6 +4976,105 @@ class StreamCheckerService:
             logger.error(f"Test Without Stats failed: {e}")
             return {'success': False, 'error': str(e), 'streams_found': 0, 'channels_queued': 0}
 
+    def test_dead_streams(self) -> Dict:
+        """Find streams currently marked as dead and queue their channels for re-checking.
+
+        Queries the DeadStreamsTracker for all streams marked as dead, groups them
+        by channel, and queues those channels for a targeted check (only the dead
+        streams within each channel will be re-analysed via FFmpeg).
+
+        This allows previously dead streams to be re-checked and potentially revived
+        if they have come back online.
+
+        Returns:
+            Dict with counts of dead streams found and channels queued
+        """
+        try:
+            from apps.database.manager import get_db_manager
+            db = get_db_manager()
+            
+            # Get all dead streams (returns dict keyed by URL with full entries)
+            dead_streams = db.get_dead_streams(as_dict=True)
+            if not dead_streams:
+                return {
+                    'success': True,
+                    'message': 'No dead streams found to re-check',
+                    'streams_found': 0,
+                    'channels_queued': 0
+                }
+
+            # Group dead stream IDs by channel_id
+            # channel_id -> list of stream_ids
+            target_stream_ids: Dict[int, List[int]] = {}
+            streams_found = 0
+
+            for url, entry in dead_streams.items():
+                stream_id = entry.get('stream_id')
+                channel_id = entry.get('channel_id')
+                
+                if stream_id is None:
+                    continue
+                
+                streams_found += 1
+                
+                if channel_id is not None:
+                    if channel_id not in target_stream_ids:
+                        target_stream_ids[channel_id] = []
+                    target_stream_ids[channel_id].append(stream_id)
+                else:
+                    # Channel ID not available from dead stream entry, try to find it via UDI
+                    try:
+                        udi = get_udi_manager()
+                        stream_data = udi.get_stream_by_id(stream_id)
+                        if stream_data:
+                            # Find which channel this stream belongs to
+                            channels = udi.get_channels()
+                            for ch in channels:
+                                if isinstance(ch, dict) and stream_id in ch.get('streams', []):
+                                    cid = ch['id']
+                                    if cid not in target_stream_ids:
+                                        target_stream_ids[cid] = []
+                                    target_stream_ids[cid].append(stream_id)
+                                    break
+                    except Exception:
+                        logger.debug(f"Could not resolve channel for dead stream {stream_id}")
+
+            if not target_stream_ids:
+                return {
+                    'success': True,
+                    'message': f'Found {streams_found} dead stream(s) but could not determine their channels',
+                    'streams_found': streams_found,
+                    'channels_queued': 0
+                }
+
+            channels_to_queue = list(target_stream_ids.keys())
+
+            # Mark channels for force check (bypasses 2-hour immunity)
+            for cid in channels_to_queue:
+                self.update_tracker.mark_channel_for_force_check(cid)
+                self.check_queue.remove_from_completed(cid)
+
+            added = self.check_queue.add_channels(channels_to_queue, priority=15)
+            logger.info(
+                f"Test Dead Streams: found {streams_found} dead stream(s) in "
+                f"{len(channels_to_queue)} channel(s), queued {added} "
+                f"(targeted check — only dead streams will be re-analysed)"
+            )
+
+            # Store target_stream_ids so the worker can pass them to _check_channel.
+            self._pending_target_stream_ids.update(target_stream_ids)
+
+            return {
+                'success': True,
+                'streams_found': streams_found,
+                'channels_affected': len(channels_to_queue),
+                'channels_queued': added,
+                'message': f'Queued {added} channel(s) — {streams_found} dead stream(s) will be re-checked for potential revival'
+            }
+        except Exception as e:
+            logger.error(f"Test Dead Streams failed: {e}")
+            return {'success': False, 'error': str(e), 'streams_found': 0, 'channels_queued': 0}
+
     def trigger_global_action(self) -> Dict:
         """Queue all channels for a full force check (Global Action).
         

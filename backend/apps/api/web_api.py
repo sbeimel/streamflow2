@@ -1355,6 +1355,20 @@ def test_streams_without_stats():
         return jsonify({"error": "Internal Server Error"}), 500
 
 
+@app.route('/api/stream-checker/test-dead-streams', methods=['POST'])
+def test_dead_streams():
+    """Find previously dead streams and queue their channels for re-checking (potential revival)."""
+    try:
+        service = get_stream_checker_service()
+        result = service.test_dead_streams()
+        if result.get('success'):
+            return jsonify(result), 202
+        return jsonify(result), 500
+    except Exception as e:
+        logger.error(f"Error triggering test dead streams: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
+
+
 @app.route('/api/stream-checker/global-action', methods=['POST'])
 def trigger_global_action():
     """Trigger a global force check of all channels (bypasses immunity)."""

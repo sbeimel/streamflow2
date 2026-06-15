@@ -1856,17 +1856,18 @@ class StreamCheckerService:
                     )
                     # Rescore mode: check cached stats against profile minimum quality
                     # requirements (min_resolution, max_resolution, min_fps, min_bitrate).
-                    # Streams that fail get score 0.0 so they sort to bottom and are
-                    # trimmed by stream_limit.  No FFmpeg is run.
+                    # Streams that fail are removed from the list entirely so Provider
+                    # Diversification and stream_limit don't re-include them.
+                    # No FFmpeg is run.
                     _rescore_is_dead, _rescore_reason = self._is_stream_dead(
                         cached_analyzed, channel_id, threshold_config=_threshold_config
                     )
                     if _rescore_is_dead:
                         logger.info(
-                            f"[rescore] Stream {stream_id} ({stream.get('name')}) "
-                            f"below quality threshold ({_rescore_reason}) — score set to 0.0"
+                            f"[rescore] Excluding stream {stream_id} ({stream.get('name')}) "
+                            f"from channel — {_rescore_reason} (cached stats below profile threshold)"
                         )
-                        cached_analyzed['score'] = 0.0
+                        continue  # skip adding to cached_analyzed_streams
                     cached_analyzed_streams.append(cached_analyzed)
 
                 analyzed_streams.extend(cached_analyzed_streams)
@@ -2796,18 +2797,19 @@ class StreamCheckerService:
                     analyzed['score'] = score
                     # Rescore mode: check cached stats against profile minimum quality
                     # requirements (min_resolution, max_resolution, min_fps, min_bitrate).
-                    # Streams that fail get score 0.0 so they sort to bottom and are
-                    # trimmed by stream_limit.  No FFmpeg is run.
+                    # Streams that fail are removed from the list entirely so Provider
+                    # Diversification and stream_limit don't re-include them.
+                    # No FFmpeg is run.
                     if rescore_mode:
                         _rescore_is_dead, _rescore_reason = self._is_stream_dead(
                             analyzed, channel_id, threshold_config=_threshold_config
                         )
                         if _rescore_is_dead:
                             logger.info(
-                                f"[rescore] Stream {stream['id']} ({stream.get('name')}) "
-                                f"below quality threshold ({_rescore_reason}) — score set to 0.0"
+                                f"[rescore] Excluding stream {stream['id']} ({stream.get('name')}) "
+                                f"from channel — {_rescore_reason} (cached stats below profile threshold)"
                             )
-                            analyzed['score'] = 0.0
+                            continue
                     analyzed_streams.append(analyzed)
                     logger.debug(f"Using cached data for stream {stream['id']}: {stream.get('name')} - Score: {score:.2f}")
                 else:
